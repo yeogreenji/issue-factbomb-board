@@ -1,0 +1,27 @@
+{
+  "name": "issue-factbomb-board",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "이슈온도계 — 한 줄 팩폭 이슈·트렌드 브리핑 보드. 3줄 요약·업계인 속마음·여론 온도계 투표·팩폭 댓글 배틀·공유 카드·에디터 발행 스튜디오",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "^0.544.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.13",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "tailwindcss": "^4.1.13",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5"
+  }
+}
