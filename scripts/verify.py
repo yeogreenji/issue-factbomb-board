@@ -526,8 +526,11 @@ def api_checks(port: int):
 
 def main() -> int:
     SHOTS.mkdir(parents=True, exist_ok=True)
+    # 이 스위트가 만드는 스크린샷(01-…, 02b-… 처럼 숫자로 시작)만 지웁니다.
+    # drag-mid.png(드래그 스위트가 만드는 카드뉴스 드래그 장면)는 그대로 둡니다.
     for old in SHOTS.glob("*.png"):
-        old.unlink()
+        if re.match(r"^\d", old.name):
+            old.unlink()
 
     print("== 빌드 ==")
     subprocess.run(["npm", "run", "build"], cwd=ROOT, env=ENV, check=True, stdout=subprocess.DEVNULL)

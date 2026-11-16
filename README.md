@@ -32,7 +32,11 @@
 | --- | --- | --- | --- |
 | ![표지](docs/screenshots/03-mobile-cover.png) | ![팩트](docs/screenshots/04-mobile-facts.png) | ![입장](docs/screenshots/05-mobile-sides.png) | ![투표](docs/screenshots/06-mobile-vote.png) |
 
-- 옆으로 넘기기(스와이프)·화살표·키보드(←/→) 모두 동작하고, 상단 진행 막대가 4장 중 위치를 보여 줍니다.
+- **손끝·마우스로 끌면 카드가 그대로 따라 밀립니다.** 버튼을 눌렀을 때만 툭 넘어가던 방식을 없애고, 끄는 동안 `translateX`가 실시간으로 따라오다가 손을 떼면 이동 거리·속도(짧게 튕기기)에 따라 다음·이전 장으로 부드럽게 스냅합니다. 데스크톱에서는 마우스로 잡아 끌어도 됩니다.
+- 화살표 버튼·키보드(←/→)·상단 진행 막대·아래 점을 눌러도 같은 애니메이션으로 이동합니다.
+
+![끄는 도중 — 표지가 손끝을 따라 밀리고 2장이 따라 들어오는 순간](docs/screenshots/drag-mid.png)
+- 카드 안을 세로로 스크롤할 때는 스와이프로 오인하지 않고, 첫 6px에서 가로/세로를 판별합니다.
 - ②에는 **원제(원문 제목)** 를 함께 남겨, 요약과 실제 기사를 대조할 수 있게 했습니다.
 
 ### ③ 투표 · 한 줄 반응 · 공유
@@ -169,6 +173,7 @@ npm install
 npm run dev                 # 화면만(서버 없음) → 정적 모드
 npm run build && npm run serve -- --port=4185 --ai=gemini --store=redis   # 가짜 RSS·가짜 AI로 전체 흐름
 npm run verify              # Playwright E2E (아래 표)
+npm run verify:drag         # 드래그·스와이프 전용 E2E (마우스·터치 실시간 추종)
 ```
 
 `scripts/serve.mjs` 옵션
@@ -194,6 +199,7 @@ npm run verify              # Playwright E2E (아래 표)
 | D. AI 키 없음 | 실제 헤드라인 카드, `AI 없이 제목`, `온도 미측정`, 입장 비교 없음을 숨기지 않고 설명, 투표는 동작 |
 | E. 정적 배포 | 안내 화면, **`/api` 요청 0건** |
 | F. 데스크톱 1280 | 3열 그리드, 카드뉴스 폰 프레임(440px), 가로 넘침 0 |
+| G. 드래그 스와이프 (`npm run verify:drag`) | 끄는 도중 중간 프레임 translateX가 손을 따라옴(점프 아님), 마우스 1/4→2/4→3/4·되돌리기, 터치 스와이프·짧은 튕기기, 살짝 끌면 제자리, 첫 장 저항, 투표 버튼 위에서 끌어도 넘어가고 클릭은 취소, 그냥 누르면 투표 정상, 세로 스크롤은 넘기지 않음, 390 가로 넘침 0, 콘솔 에러 0 — **26/26** |
 | API 단위 | 7개 피드 전부 수집, 카드마다 원문 URL·출처·시각, 4장 구성 요소, 카테고리·온도 범위, 공유 카드 재조회 200, 없는 카드 404, 잘못된 선택 400, `my`만 노출, **카드별 보관(캐시가 바뀌어도 공유 링크 유지)** |
 
 ### 실제 RSS 스모크 테스트 (2026-11-16, 이 환경)
@@ -235,13 +241,15 @@ src/
   App.tsx                     피드·뷰어·스튜디오 상태, 해시 라우팅(#/i/<id>)
   components/Header.tsx       워드마크 + 수집 시각·건수·AI 상태
   components/FeedCard.tsx     히어로/리스트 카드 + 미니 투표 바
-  components/CardNewsViewer.tsx  카드 4장(스와이프·키보드) + A/B 투표 + 반응 + 공유
+  components/CardNewsViewer.tsx  카드 4장(드래그 스와이프·키보드) + A/B 투표 + 반응 + 공유
+  lib/useSwipeDeck.ts  실시간 드래그·터치 스와이프(포인터 추종 + 거리/속도 스냅)
   components/TempGauge.tsx    논란 온도 게이지(미측정은 '–')
   components/StudioSheet.tsx  기사 URL·한 줄 입력
   lib/api.ts, lib/share.ts, lib/format.ts
 scripts/
   serve.mjs    실제 서버리스 함수를 번들해 띄우는 로컬 서버(+가짜 RSS·가짜 AI·가짜 Upstash)
   verify.py    Playwright E2E 84개
+  verify-drag.py  드래그·스와이프 E2E 26개
 ```
 
 개인정보: 코드·픽스처·테스트에 실제 개인정보(실명·연락처·회사·키)가 들어 있지 않습니다. 투표자는 익명 id로만 구분하고 저장하지 않습니다.

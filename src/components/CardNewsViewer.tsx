@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowUpRight,
   ChevronLeft,
@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { CATEGORY_META, type Issue, type PollSnapshot } from "../types";
 import { countLabel, percentOf, tempLabel, timeAgo } from "../lib/format";
+import { useSwipeDeck } from "../lib/useSwipeDeck";
 import { TempGauge } from "./TempGauge";
 
 interface Props {
@@ -26,13 +27,10 @@ interface Props {
 const SLIDES = 4;
 
 export function CardNewsViewer({ issue, poll, voting, onClose, onVote, onReact, onShare, onCopy }: Props) {
-  const [index, setIndex] = useState(0);
-  const startX = useRef<number | null>(null);
+  const { index, wrapRef, trackRef, go, jump, handlers } = useSwipeDeck(SLIDES);
   const meta = CATEGORY_META[issue.category];
   const labelA = poll.a || issue.poll.a;
   const labelB = poll.b || issue.poll.b;
-
-  const go = (delta: number) => setIndex((current) => Math.min(SLIDES - 1, Math.max(0, current + delta)));
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -46,26 +44,24 @@ export function CardNewsViewer({ issue, poll, voting, onClose, onVote, onReact, 
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = "";
     };
-  }, [onClose]);
-
-  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("button, a, input, textarea, form")) return;
-    startX.current = event.clientX;
-  };
-  const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (startX.current === null) return;
-    const dx = event.clientX - startX.current;
-    startX.current = null;
-    if (Math.abs(dx) > 48) go(dx < 0 ? 1 : -1);
-  };
+  }, [onClose, go]);
 
   return (
     <div className="viewer" data-testid="viewer" style={{ ["--accent" as string]: meta.color }}>
       <div className="viewer-shell">
         <div className="viewer-top">
-          <div className="progress" aria-hidden="true">
+          <div className="progress">
             {Array.from({ length: SLIDES }).map((_, i) => (
-              <span key={i} className="progress-seg" data-on={i <= index} />
+              <button
+                key={i}
+                type="button"
+                className="progress-seg"
+                data-on={i <= index}
+                aria-label={`${i + 1}장으로 이동`}
+                aria-current={i === index}
+                onClick={() => jump(i)}
+                data-testid={`progress-${i + 1}`}
+              />
             ))}
           </div>
           <div className="viewer-bar">
@@ -82,8 +78,8 @@ export function CardNewsViewer({ issue, poll, voting, onClose, onVote, onReact, 
           </div>
         </div>
 
-        <div className="slides-wrap" onPointerDown={onPointerDown} onPointerUp={onPointerUp} data-testid="slides">
-          <div className="slides" style={{ transform: `translateX(-${index * 100}%)` }}>
+        <div className="slides-wrap" ref={wrapRef} data-testid="slides" data-index={index} {...handlers}>
+          <div className="slides" ref={trackRef} style={{ transform: `translate3d(${-index * 100}%, 0, 0)` }}>
             {/* ① 표지 */}
             <section className="slide slide-cover" data-testid="slide-1" aria-hidden={index !== 0}>
               <div className="cover-full" style={{ ["--chip" as string]: meta.color }}>
@@ -92,6 +88,7 @@ export function CardNewsViewer({ issue, poll, voting, onClose, onVote, onReact, 
                     className="cover-photo"
                     src={issue.image}
                     alt=""
+                    draggable={false}
                     referrerPolicy="no-referrer"
                     onError={(event) => {
                       event.currentTarget.style.display = "none";
@@ -264,9 +261,17 @@ export function CardNewsViewer({ issue, poll, voting, onClose, onVote, onReact, 
           <button type="button" onClick={() => go(-1)} disabled={index === 0} aria-label="이전 카드" data-testid="prev">
             <ChevronLeft size={20} />
           </button>
-          <div className="dots" aria-hidden="true">
+          <div className="dots">
             {Array.from({ length: SLIDES }).map((_, i) => (
-              <span key={i} className="dot-item" data-on={i === index} />
+              <button
+                key={i}
+                type="button"
+                className="dot-item"
+                data-on={i === index}
+                aria-label={`${i + 1}장으로 이동`}
+                aria-current={i === index}
+                onClick={() => jump(i)}
+              />
             ))}
           </div>
           {index < SLIDES - 1 ? (

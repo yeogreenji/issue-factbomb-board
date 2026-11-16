@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.api.json",
     "bundle:api": "esbuild api/trending.ts --bundle --format=esm --platform=node --target=node20 --outfile=.tmp/trending.mjs && esbuild api/briefing.ts --bundle --format=esm --platform=node --target=node20 --outfile=.tmp/briefing.mjs && esbuild api/poll.ts --bundle --format=esm --platform=node --target=node20 --outfile=.tmp/poll.mjs",
     "serve": "node scripts/serve.mjs",
-    "verify": "python3 scripts/verify.py"
+    "verify": "python3 scripts/verify.py",
+    "verify:drag": "python3 scripts/verify-drag.py"
   },
   "dependencies": {
     "lucide-react": "^0.544.0",
