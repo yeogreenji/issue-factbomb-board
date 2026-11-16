@@ -5,11 +5,15 @@
   "installCommand": "npm ci --include=dev",
   "outputDirectory": "dist",
   "functions": {
+    "api/trending.ts": {
+      "maxDuration": 60,
+      "memory": 512
+    },
     "api/briefing.ts": {
       "maxDuration": 60,
       "memory": 512
     },
-    "api/board.ts": {
+    "api/poll.ts": {
       "maxDuration": 30,
       "memory": 512
     }

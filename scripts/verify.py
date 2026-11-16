@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""이슈온도계 실전형 개조 검증.
+"""이슈온도계 v3 검증 — 실제 뉴스 수집 → 카드뉴스 → A/B 투표 → 공유를 실제 브라우저로 확인합니다.
 
-세 가지 배포 상황을 실제 서버리스 함수 코드로 그대로 띄워 확인합니다.
+시나리오
+  A. 모바일 390 — 가짜 언론사 RSS 7곳 + 가짜 Gemini로 피드·카드 4장·투표·반응·공유
+  B. 두 번째 브라우저 — 같은 공용 저장소에서 투표 집계가 함께 쌓이는지
+  C. 뉴스로 만들기 — 기사 링크를 넣으면 본문을 읽어 카드가 생기는지(+ 한 줄 입력, 링크 거부)
+  D. AI 키 없음 — 실제 헤드라인만으로 카드가 뜨고 "AI 없이" 표시가 정직한지
+  E. 정적 배포 — 서버가 없을 때 안내가 뜨고 /api 요청을 보내지 않는지
+  F. 데스크톱 1280 — 레이아웃·카드뉴스 프레임·가로 넘침
 
-  A. 정적 호스팅(GitHub Pages 모양)  — API 없음 → 로컬 체험 모드 + 규칙 요약
-  B. 공용 DB + AI 키                — 실시간 공용 DB + 실시간 AI (발행·투표·팩폭이 브라우저를 넘어 공유)
-  C. 공용 DB + AI 키 없음            — 실시간 공용 DB + 규칙 요약 폴백
-
-실행: npm run verify  (먼저 `npm run build` 는 스크립트가 직접 합니다)
+실행: npm run verify   (필요하면 스크립트가 직접 빌드합니다)
 """
-import os
 import json
+import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -20,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from playwright.sync_api import expect, sync_playwright
+from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 SHOTS = ROOT / "docs" / "screenshots"
@@ -32,85 +35,35 @@ if Path(NODE_BIN).exists():
     ENV["PATH"] = f"{NODE_BIN}:{ENV.get('PATH', '')}"
 if Path(LIBS).exists():
     ENV["LD_LIBRARY_PATH"] = f"{LIBS}:{ENV.get('LD_LIBRARY_PATH', '')}"
-# 브라우저를 띄우는 것은 이 파이썬 프로세스이므로, 현재 환경에도 같은 라이브러리 경로를 심습니다.
-os.environ["LD_LIBRARY_PATH"] = ENV["LD_LIBRARY_PATH"]
-
-SHOTS.mkdir(parents=True, exist_ok=True)
+os.environ["LD_LIBRARY_PATH"] = ENV.get("LD_LIBRARY_PATH", "")
 
 checks: list[tuple[str, bool, str]] = []
-console_errors: list[str] = []
+console_errors: list[tuple[str, str]] = []
 
 
 def check(name: str, passed: bool, detail: str = "") -> None:
     checks.append((name, bool(passed), detail))
-    mark = "PASS " if passed else "FAIL "
-    print(mark + name + (f" — {detail}" if detail and not passed else ""))
+    print(("PASS " if passed else "FAIL ") + name + (f" — {detail}" if detail and not passed else ""))
 
 
-def attach(page, tag: str) -> dict:
-    """콘솔 오류 수집. 일부러 네트워크를 끊는 구간은 태그를 바꿔 따로 셉니다."""
-    state = {"tag": tag}
-
+def attach(page, tag: str):
     def on_console(msg):
         if msg.type in ("error", "warning"):
-            console_errors.append((state["tag"], f"[{msg.type}] {msg.text}"))
+            console_errors.append((tag, f"[{msg.type}] {msg.text}"))
 
     def on_pageerror(error):
-        console_errors.append((state["tag"], f"[pageerror] {error}"))
+        console_errors.append((tag, f"[pageerror] {error}"))
 
     page.on("console", on_console)
     page.on("pageerror", on_pageerror)
-    return state
+    return page
 
 
-def settle(page, ms: int = 450) -> None:
+def settle(page, ms: int = 250) -> None:
     page.wait_for_timeout(ms)
-    page.evaluate("document.fonts.ready")
-    page.wait_for_timeout(120)
-
-
-def wait_port(port: int, timeout: float = 30.0) -> None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-                return
-        except OSError:
-            time.sleep(0.25)
-    raise RuntimeError(f"port {port} did not open")
-
-
-def serves(dist: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["npx", "vite", "build", "--outDir", dist],
-        cwd=ROOT,
-        env=ENV,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-
-def build() -> None:
-    print("· build: npm run build")
-    subprocess.run(["npm", "run", "build"], cwd=ROOT, env=ENV, check=True, capture_output=True, text=True)
-    print("· build: 정적 호스팅 번들(dist-static)")
-    static_env = {**ENV, "VITE_STATIC_ONLY": "1"}
-    subprocess.run(
-        ["npx", "vite", "build", "--outDir", "dist-static"],
-        cwd=ROOT,
-        env=static_env,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-
-SERVERS: list[subprocess.Popen] = []
 
 
 def free_port(port: int) -> None:
-    """이전 실행이 남긴 서버가 포트를 잡고 있으면 정리합니다(작은 환경에서 메모리도 함께 회수)."""
     out = subprocess.run(["ss", "-lptnH", f"sport = :{port}"], capture_output=True, text=True).stdout
     for pid in set(re.findall(r"pid=(\d+)", out)):
         try:
@@ -121,515 +74,533 @@ def free_port(port: int) -> None:
         time.sleep(0.6)
 
 
-def start_server(port: int, *, dist: str, api: str, store: str, ai: str) -> str:
+def wait_port(port: int, timeout: float = 40.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with socket.socket() as sock:
+            sock.settimeout(0.4)
+            if sock.connect_ex(("127.0.0.1", port)) == 0:
+                return
+        time.sleep(0.25)
+    raise RuntimeError(f"서버가 {port} 포트에서 뜨지 않았습니다")
+
+
+def start_server(
+    port: int,
+    *,
+    dist: str = "dist",
+    api: str = "on",
+    store: str = "memory",
+    ai: str = "off",
+    feeds: str = "on",
+    allow_local: str = "on",
+):
     free_port(port)
-    log = ROOT / f".tmp/serve-{port}.log"
-    log.parent.mkdir(exist_ok=True)
-    handle = open(log, "w")
+    log_path = ROOT / ".tmp" / f"serve-{port}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log = open(log_path, "w")
     proc = subprocess.Popen(
         [
             "node",
             "scripts/serve.mjs",
-            "--port",
-            str(port),
+            f"--port={port}",
             f"--dist={dist}",
             f"--api={api}",
             f"--store={store}",
             f"--ai={ai}",
+            f"--feeds={feeds}",
+            f"--allow-local={allow_local}",
         ],
         cwd=ROOT,
         env=ENV,
-        stdout=handle,
+        stdout=log,
         stderr=subprocess.STDOUT,
     )
-    SERVERS.append(proc)
     wait_port(port)
-    return f"http://127.0.0.1:{port}/"
+    return proc, log
 
 
-def stop_servers() -> None:
-    for proc in SERVERS:
-        proc.terminate()
-    for proc in SERVERS:
+def stop_server(proc) -> None:
+    try:
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=8)
+    except Exception:
         try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
             proc.kill()
-    SERVERS.clear()
-    # 다음 시나리오가 같은 포트를 쓸 수 있게 잠깐 쉼니다(작은 환경의 프로세스·스레드 한도 안에서 돌리기 위해).
-    time.sleep(0.8)
+        except Exception:
+            pass
 
 
-def temp_number(text: str) -> int:
-    digits = re.sub(r"\D", "", text)
-    return int(digits) if digits else 0
+def api_json(port: int, path: str, payload: dict | None = None) -> tuple[int, dict]:
+    import urllib.error
+    import urllib.request
+
+    url = f"http://127.0.0.1:{port}{path}"
+    data = None
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload).encode()
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return response.status, json.loads(response.read().decode())
+    except urllib.error.HTTPError as error:
+        try:
+            return error.code, json.loads(error.read().decode())
+        except Exception:
+            return error.code, {}
 
 
-# ---------------------------------------------------------------- scenario A
+def no_overflow(page) -> bool:
+    return page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
 
 
-def scenario_static(base: str, browser) -> None:
-    print("\n=== A. 정적 호스팅 (API 없음) ===")
-    ctx = browser.new_context(viewport={"width": 1440, "height": 1000}, locale="ko-KR", accept_downloads=True)
-    ctx.grant_permissions(["clipboard-read", "clipboard-write"])
-    page = ctx.new_page()
-    attach(page, "A")
-    api_requests: list[str] = []
-    page.on("request", lambda r: api_requests.append(r.url) if "/api/" in r.url else None)
-    page.goto(base, wait_until="networkidle")
-    page.evaluate("localStorage.clear()")
-    page.reload(wait_until="networkidle")
-    settle(page, 800)
-
-    check("A: 상태 배지 = 로컬 체험 모드", "로컬 체험 모드" in page.get_by_test_id("status-db").inner_text())
-    check("A: AI 배지 = 규칙 요약", "규칙 요약" in page.get_by_test_id("status-ai").inner_text())
-    check("A: 데모 이슈 12건", page.locator("main article").count() == 12)
-    hero = page.locator("section[aria-label='오늘의 최고 온도 이슈']")
-    check("A: 히어로 온도 94", temp_number(hero.locator(".nums.serif").first.inner_text()) == 94)
-    page.screenshot(path=str(SHOTS / "01-desktop-hero.png"))
-
-    hero.get_by_role("button", name=re.compile("불타는 중")).click()
-    settle(page, 600)
-    check(
-        "A: 히어로 투표 선택",
-        hero.get_by_role("button", name=re.compile("불타는 중")).get_attribute("aria-pressed") == "true",
-    )
-    stored = page.evaluate("JSON.parse(localStorage.getItem('factbomb.board.v2')).myVotes")
-    check("A: 투표가 저장됨(v2 스냅샷)", stored.get("luna-beauty-seongsu-popup") == "hot")
-    baseline = page.evaluate("JSON.parse(localStorage.getItem('factbomb.board.v2')).votes['luna-beauty-seongsu-popup']")
-    check("A: 실제 참여표만 저장(데모 기준값 분리)", baseline == {"hot": 1, "watch": 0, "cool": 0}, str(baseline))
-    page.screenshot(path=str(SHOTS / "02-desktop-vote.png"))
-
-    page.locator("h2", has_text="이슈 피드").scroll_into_view_if_needed()
-    settle(page, 500)
-    page.screenshot(path=str(SHOTS / "03-desktop-feed.png"))
-    page.screenshot(path=str(SHOTS / "03b-desktop-feed-full.png"), full_page=True)
-    page.evaluate("window.scrollTo(0, 0)")
-    settle(page, 300)
-
-    page.get_by_role("button", name=re.compile("^IT·테크")).first.click()
-    settle(page, 350)
-    check("A: IT 카테고리 3건", page.locator("main article").count() == 3)
-    page.get_by_role("button", name=re.compile("^전체")).first.click()
-    settle(page, 300)
-
-    page.locator("main article h3").first.click()
-    page.wait_for_url(re.compile(r"#/issue/"))
-    settle(page, 600)
-    check("A: 상세 30초 요약", page.get_by_text("30초 요약").count() == 1)
-    check("A: 상세 업계인 속마음", page.get_by_text("PR·업계인 속마음").count() == 1)
-
-    box = page.get_by_label("한 줄 팩폭 남기기")
-    box.click()
-    box.fill("재고표를 먼저 공개했으면 줄도 이렇게 안 길었겠다.")
-    page.get_by_role("button", name="등록").click()
-    settle(page, 500)
-    check("A: 내 팩폭이 '나 · 익명'으로 보임", page.get_by_text(re.compile("나 · 익명")).count() >= 1)
-    check("A: 팩폭 27개(기존 26 + 내 1)", len(page.evaluate("JSON.parse(localStorage.getItem('factbomb.board.v2')).comments")) == 27)
-    page.screenshot(path=str(SHOTS / "04-desktop-detail.png"))
-    page.screenshot(path=str(SHOTS / "04b-desktop-detail-full.png"), full_page=True)
-    first_like = page.get_by_role("button", name="이 팩폭에 좋아요").first
-    first_like.click()
-    settle(page, 300)
-    check("A: 팩폭 좋아요 토글", first_like.get_attribute("aria-pressed") == "true")
-    page.locator("h3", has_text="한 줄 팩폭 배틀").scroll_into_view_if_needed()
-    settle(page, 300)
-    page.screenshot(path=str(SHOTS / "05-desktop-comment.png"))
-
-
-    # 공유 카드 + 링크
-    page.get_by_role("button", name="이 온도로 공유 카드 만들기").click()
-    page.wait_for_selector("img[alt*='공유 카드 미리보기']", timeout=15000)
-    settle(page, 600)
-    src = page.locator("img[alt*='공유 카드 미리보기']").get_attribute("src") or ""
-    check("A: 공유 카드 PNG 렌더", src.startswith("data:image/png") and len(src) > 40000)
-    link_text = page.locator("p[title^='http']").first.get_attribute("title") or ""
-    check("A: 공유 링크가 ?issue= 형식", "?issue=" in link_text, link_text)
-    page.get_by_role("button", name="이슈 링크 복사").click()
+def open_viewer(page):
+    page.locator('[data-testid="hero-card"] button').click()
+    page.wait_for_selector('[data-testid="viewer"]', timeout=8000)
     settle(page, 400)
-    clip = page.evaluate("navigator.clipboard.readText()")
-    check("A: 링크 클립보드 복사", clip.strip() == link_text.strip(), clip)
-    page.get_by_role("button", name=re.compile("요약 \\+ 링크 텍스트 복사")).click()
-    settle(page, 400)
-    clip_text = page.evaluate("navigator.clipboard.readText()")
-    check("A: 요약+링크 텍스트 복사", "이슈온도계에서 투표하기" in clip_text and "1. " in clip_text)
-    page.screenshot(path=str(SHOTS / "06-desktop-share.png"))
-    page.get_by_role("button", name=re.compile("정사각")).click()
-    settle(page, 900)
-    check("A: 정사각 카드 전환", page.get_by_role("button", name=re.compile("정사각")).get_attribute("aria-pressed") == "true")
-    page.screenshot(path=str(SHOTS / "07-desktop-share-square.png"))
-    page.get_by_role("button", name="닫기").click()
-    settle(page, 300)
-
-    shared_id = page.url.split("#/issue/")[-1]
-
-    # 랭킹 페이지 회귀
-    page.get_by_role("button", name="팩폭 랭킹").first.click()
-    page.wait_for_url(re.compile(r"#/ranking"))
-    settle(page, 700)
-    check("A: 랭킹 페이지 포디움", page.locator("article").count() >= 1)
-    podium = page.locator("article").first.inner_text()
-    check("A: 랭킹 1위 = 328 좋아요 팩폭", "구독료 내고" in podium and "328" in podium, podium[:60])
-    check("A: 랭킹 목록 20건 이상", page.locator("ol li").count() >= 20)
-    page.screenshot(path=str(SHOTS / "08-desktop-ranking.png"))
-    page.get_by_role("button", name="뉴스룸으로").first.click()
-    settle(page, 500)
 
 
-    # 편집기: AI 버튼 → 규칙 요약 폴백
-    page.get_by_role("button", name="에디터 스튜디오").first.click()
-    page.wait_for_url(re.compile(r"#/editor"))
-    settle(page, 500)
-    page.get_by_role("button", name="예시 메모 넣기").click()
-    page.get_by_role("button", name=re.compile("AI로 팩폭 초안 생성")).click()
-    settle(page, 700)
-    check("A: AI 없이도 초안 생성(규칙 요약 배지)", "규칙 요약" in page.get_by_test_id("draft-panel").inner_text())
-    check("A: 헤드라인 채움", "페이퍼백" in page.locator("#headline").input_value())
-    check(
-        "A: 3줄 요약 채움",
-        all(len(page.locator("textarea").nth(i).input_value()) > 5 for i in range(3)),
-    )
-    check("A: 폴백 사유 안내", "AI 키가 없어" in page.get_by_test_id("draft-panel").inner_text())
-    check("A: 정적 빌드는 /api 요청을 보내지 않음", not api_requests, str(api_requests[:3]))
-    page.screenshot(path=str(SHOTS / "09-desktop-editor.png"), full_page=True)
+def goto_slide(page, n: int) -> None:
+    for _ in range(n):
+        page.locator('[data-testid="next"]').click()
+        settle(page, 450)
 
-    page.get_by_role("button", name="지금 발행하기").click()
-    page.wait_for_url(re.compile(r"#/issue/issue-"), timeout=10000)
-    settle(page, 600)
-    check("A: 발행 후 상세 열림", "페이퍼백" in page.locator("h1").first.inner_text())
-    check("A: 방금 발행 배지", page.get_by_text("방금 발행").count() >= 1)
 
-    page.screenshot(path=str(SHOTS / "10-desktop-published.png"))
-    aside = page.locator("aside")
-    before = temp_number(page.locator("aside .nums.serif").first.inner_text())
-    aside.get_by_role("button", name=re.compile("불타는 중")).click()
-    settle(page, 700)
-    after = temp_number(page.locator("aside .nums.serif").first.inner_text())
-    check("A: 새 이슈 첫 투표에 온도가 움직임", after != before, f"{before} → {after}")
-    page.screenshot(path=str(SHOTS / "11-desktop-published-vote.png"))
+def go_next(page) -> None:
+    """한 장씩 넘기며 진행 표시(1/4 등)가 바뀌는지 함께 확인합니다."""
+    current = page.locator(".viewer-count").inner_text().strip()
+    page.locator('[data-testid="next"]').click()
+    settle(page, 480)
+    after = page.locator(".viewer-count").inner_text().strip()
+    check(f"A: 카드 넘김 {current} → {after}", current != after, f"{current} -> {after}")
 
-    page.reload(wait_until="networkidle")
-    settle(page, 600)
-    check("A: 새로고침 후에도 발행 이슈 유지", "페이퍼백" in page.locator("h1").first.inner_text())
 
-    # ?issue= 파라미터로 상세 열기
-    open_page = ctx.new_page()
-    attach(open_page, "A-share")
-    open_page.goto(f"{base}?issue={shared_id}", wait_until="networkidle")
-    settle(open_page, 700)
-    check("A: 공유 링크(?issue=)로 상세 열림", open_page.get_by_text("30초 요약").count() == 1)
-    open_page.close()
+# ------------------------------------------------------------------ scenario A
 
-    # 모바일 390
-    mctx = browser.new_context(
+def scenario_mobile(base: str, browser):
+    ctx = browser.new_context(
         viewport={"width": 390, "height": 844},
-        device_scale_factor=1,
-        locale="ko-KR",
+        device_scale_factor=2,
         is_mobile=True,
         has_touch=True,
+        permissions=["clipboard-read", "clipboard-write"],
     )
-    mp = mctx.new_page()
-    attach(mp, "A-mobile")
-    mp.goto(base, wait_until="networkidle")
-    settle(mp, 700)
-    check(
-        "A: 모바일 390 가로 넘침 없음(피드)",
-        mp.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1"),
-    )
-    check(
-        "A: 모바일 상태 배지 잘림 없음",
-        mp.evaluate("document.querySelector('[data-testid=status-db]').getBoundingClientRect().right <= window.innerWidth + 1"),
-    )
-    mp.screenshot(path=str(SHOTS / "13-mobile-feed.png"), full_page=True)
-    mp.locator("main article h3").first.click()
-    settle(mp, 600)
-    check(
-        "A: 모바일 390 가로 넘침 없음(상세)",
-        mp.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1"),
-    )
-    mp.screenshot(path=str(SHOTS / "14-mobile-detail.png"))
-    mp.get_by_role("button", name="에디터 스튜디오").last.click()
-    settle(mp, 500)
-    check(
-        "A: 모바일 390 가로 넘침 없음(편집기)",
-        mp.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1"),
-    )
-    mp.screenshot(path=str(SHOTS / "16-mobile-editor.png"), full_page=True)
-    mp.get_by_role("button", name="팩폭 랭킹").last.click()
-    settle(mp, 500)
-    mp.screenshot(path=str(SHOTS / "15-mobile-ranking.png"))
-    mctx.close()
+    page = attach(ctx.new_page(), "A")
+    page.goto(base, wait_until="networkidle")
+    page.wait_for_selector('[data-testid="feed-card"]', timeout=20000)
+    settle(page, 500)
 
-    # 태블릿 1024
-    page.set_viewport_size({"width": 1024, "height": 820})
-    page.get_by_role("button", name="뉴스룸").first.click()
+    cards = page.locator('[data-testid="feed-card"]').count()
+    check("A: 오늘의 카드뉴스 4건 이상", cards >= 3, f"{cards}건")
+    check("A: 1위 히어로 카드", page.locator('[data-testid="hero-card"]').count() == 1)
+
+    hook = page.locator('[data-testid="hero-card"] .hero-hook').inner_text().strip()
+    check("A: 히어로 한 줄 훅 표시", len(hook) >= 8, hook)
+    check("A: 출처·시간 표시", bool(re.search(r"분 전|시간 전|방금", page.locator('[data-testid="hero-card"]').inner_text())))
+
+    strip = page.locator(".live-strip").inner_text()
+    check("A: 수집 시각·건수·AI 상태 노출", "기준" in strip and "이슈" in strip and "AI" in strip, strip)
+
+    body = page.inner_text("body")
+    check("A: 언론사 이름 표시", any(name in body for name in ("연합뉴스", "블로터", "매일경제")))
+    check(
+        "A: 카드에 원문 기사 링크",
+        (page.locator('[data-testid="hero-card"]').get_attribute("data-issue-id") or "") != "",
+    )
+    check("A: 모바일 390 가로 넘침 없음(피드)", no_overflow(page))
+    page.screenshot(path=str(SHOTS / "01-mobile-feed.png"), full_page=True)
+
+    # 카드뉴스 열기
+    open_viewer(page)
+    check("A: 카드뉴스 뷰어 열림", page.locator('[data-testid="viewer"]').count() == 1)
+    check("A: 진행 막대 4칸", page.locator(".progress-seg").count() == 4)
+    cover_hook = page.locator(".cover-hook").inner_text().strip()
+    check("A: 표지에 같은 훅", cover_hook == hook, f"{cover_hook} != {hook}")
+    check("A: 표지에 카테고리·온도", page.locator(".cover-top .chip").count() == 1 and "°" in page.locator(".cover-top").inner_text())
+    src_href = page.locator(".viewer-src").get_attribute("href") or ""
+    check("A: 카드 상단에 원문 링크", src_href.startswith("http"), src_href[:60])
+    check("A: 모바일 390 가로 넘침 없음(표지)", no_overflow(page))
+    page.screenshot(path=str(SHOTS / "03-mobile-cover.png"))
+
+    # ② 팩트 2줄
+    go_next(page)
+    facts = page.locator('[data-testid="slide-2"] .fact-text')
+    check("A: ② 무슨 일인데 — 팩트 2줄", facts.count() == 2, f"{facts.count()}개")
+    fact_texts = [facts.nth(i).inner_text().strip() for i in range(facts.count())]
+    check("A: 팩트가 문장으로 읽힘", all(len(text) >= 12 for text in fact_texts), str(fact_texts))
+    check("A: 원제(원문 제목) 함께 표시", "원제" in page.locator('[data-testid="slide-2"]').inner_text())
+    page.screenshot(path=str(SHOTS / "04-mobile-facts.png"))
+
+    # ③ 양쪽 입장
+    go_next(page)
+    sides = page.locator('[data-testid="slide-3"] .side p')
+    check("A: ③ 어디서 갈리나 — 양쪽 입장", sides.count() == 2)
+    check("A: 양쪽 입장이 서로 다름", sides.nth(0).inner_text().strip() != sides.nth(1).inner_text().strip())
+    page.screenshot(path=str(SHOTS / "05-mobile-sides.png"))
+
+    # ④ 투표
+    go_next(page)
+    check("A: ④ 투표 질문", len(page.locator('[data-testid="slide-4"] .vote-q').inner_text().strip()) >= 6)
+    label_a = page.locator('[data-testid="vote-a"] .opt-label').inner_text().strip()
+    label_b = page.locator('[data-testid="vote-b"] .opt-label').inner_text().strip()
+    check("A: A/B 선택지 표시", len(label_a) >= 2 and len(label_b) >= 2, f"{label_a} / {label_b}")
+    check("A: 투표 전에는 % 숨김", page.locator('[data-testid="result-a"]').count() == 0)
+
+    page.locator('[data-testid="vote-a"]').click()
+    page.wait_for_selector('[data-testid="result-a"]', timeout=8000)
+    settle(page, 700)
+    pct_a = page.locator('[data-testid="result-a"]').inner_text()
+    check("A: 한 번 누르면 % 반영", pct_a.strip().endswith("%") and int(pct_a.replace("%", "")) > 0, pct_a)
+    check("A: 누적 참여 수 표시", "명 참여" in page.locator(".vote-foot").inner_text())
+    check("A: 내 선택 표시", page.locator('[data-testid="vote-a"]').get_attribute("aria-pressed") == "true")
+
+    # 한 줄 반응
+    page.fill('[data-testid="reaction-input"]', "이건 좀 심하다")
+    page.locator('[data-testid="reaction-submit"]').click()
+    page.wait_for_selector('[data-testid="reaction-list"]', timeout=8000)
+    settle(page, 500)
+    check("A: 한 줄 반응 등록", "이건 좀 심하다" in page.locator('[data-testid="reaction-list"]').inner_text())
+    page.screenshot(path=str(SHOTS / "06-mobile-vote.png"))
+
+    # 복사
+    page.locator('[data-testid="copy-link"]').click()
     settle(page, 600)
-    page.locator("h2", has_text="이슈 피드").scroll_into_view_if_needed()
-    page.evaluate("window.scrollBy(0, -120)")
-    settle(page, 400)
-    check(
-        "A: 태블릿 1024 가로 넘침 없음",
-        page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1"),
-    )
-    page.screenshot(path=str(SHOTS / "12-tablet-feed.png"))
+    check("A: 링크 복사 안내", page.locator('[data-testid="toast"]').count() == 1)
+    clip = page.evaluate("navigator.clipboard.readText().catch(() => '')")
+    check("A: 복사된 링크에 카드 주소", "#/i/" in (clip or ""), str(clip)[:80])
+
+    share_url = page.evaluate("location.href")
+    check("A: 주소에 카드 id", "#/i/" in share_url, share_url)
+
+    # 새로고침 후에도 투표 유지 (같은 브라우저 = 같은 voterId)
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector('[data-testid="viewer"]', timeout=15000)
+    settle(page, 700)
+    check("A: 새로고침해도 같은 카드가 열림", page.locator(".cover-hook").inner_text().strip() == hook)
+    goto_slide(page, 3)
+    check("A: 새로고침해도 내 표 유지", page.locator('[data-testid="vote-a"]').get_attribute("aria-pressed") == "true")
+    check("A: 집계 유지", "명 참여" in page.locator(".vote-foot").inner_text(), page.locator(".vote-foot").inner_text())
+
+    # 공유 링크를 새 브라우저에서 열기
+    share_ctx = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True)
+    share_page = attach(share_ctx.new_page(), "A-share")
+    share_page.goto(share_url, wait_until="networkidle")
+    share_page.wait_for_selector('[data-testid="viewer"]', timeout=15000)
+    settle(share_page, 600)
+    check("A: 공유 링크로 바로 카드 열림", share_page.locator(".cover-hook").inner_text().strip() == hook)
+    check("A: 모바일 390 가로 넘침 없음(카드)", no_overflow(share_page))
+
+    share_ctx.close()
+    ctx.close()
+    return hook, label_a, label_b
+
+
+# ------------------------------------------------------------- scenario B (공용)
+
+def scenario_shared(base: str, browser, hook: str):
+    ctx = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
+    page = attach(ctx.new_page(), "B")
+    page.goto(base, wait_until="networkidle")
+    page.wait_for_selector('[data-testid="feed-card"]', timeout=20000)
+    settle(page, 500)
+    open_viewer(page)
+    goto_slide(page, 3)
+
+    total_text = page.locator(".vote-foot").inner_text()
+    check("B: 다른 브라우저에서도 같은 카드", page.locator(".cover-hook").inner_text().strip() == hook)
+    check("B: 앞서 던진 표가 보임", "명 참여" in total_text, total_text)
+
+    page.locator('[data-testid="vote-b"]').click()
+    page.wait_for_selector('[data-testid="result-b"]', timeout=8000)
+    settle(page, 800)
+    pct_a = page.locator('[data-testid="result-a"]').inner_text()
+    pct_b = page.locator('[data-testid="result-b"]').inner_text()
+    check("B: 두 번째 표가 비율을 바꿈", pct_a.strip() == "50%" and pct_b.strip() == "50%", f"{pct_a}/{pct_b}")
+    check("B: 참여 수 2명", "2명 참여" in page.locator(".vote-foot").inner_text(), page.locator(".vote-foot").inner_text())
+    page.screenshot(path=str(SHOTS / "07-mobile-vote-shared.png"))
     ctx.close()
 
 
-# ---------------------------------------------------------------- scenario B
+# --------------------------------------------------------------- scenario C (제작)
 
-
-def scenario_shared(base: str, browser) -> None:
-    print("\n=== B. 공용 DB + 실시간 AI ===")
-    ctx = browser.new_context(viewport={"width": 1440, "height": 1000}, locale="ko-KR")
-    page = ctx.new_page()
-    console_state = attach(page, "B")
+def scenario_briefing(base: str, browser, port: int):
+    ctx = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    page = attach(ctx.new_page(), "C")
     page.goto(base, wait_until="networkidle")
-    settle(page, 900)
-
-    check("B: 상태 배지 = 실시간 공용 DB", "실시간 공용 DB" in page.get_by_test_id("status-db").inner_text())
-    check("B: AI 배지 = 실시간 AI", "실시간 AI" in page.get_by_test_id("status-ai").inner_text())
-
-    page.get_by_role("button", name="에디터 스튜디오").first.click()
-    page.wait_for_url(re.compile(r"#/editor"))
+    page.wait_for_selector('[data-testid="feed-card"]', timeout=20000)
     settle(page, 400)
-    page.get_by_role("button", name="예시 메모 넣기").click()
-    page.get_by_role("button", name=re.compile("AI로 팩폭 초안 생성")).click()
-    page.wait_for_selector("[data-testid=draft-panel]", timeout=20000)
+
+    page.locator('[data-testid="open-studio"]').click()
+    page.wait_for_selector('[data-testid="studio-input"]')
+    settle(page, 300)
+    page.screenshot(path=str(SHOTS / "08-mobile-studio.png"))
+    page.fill(
+        '[data-testid="studio-input"]',
+        f"http://127.0.0.1:{port}/fake-article/%EC%A3%BC%204%EC%9D%BC%EC%A0%9C%20%EC%8B%9C%EB%B2%94%20%EC%82%AC%EC%97%85%20%EC%B0%B8%EC%97%AC%20%EA%B8%B0%EC%97%85%20%EB%91%90%20%EB%B0%B0%EB%A1%9C%20%EB%8A%98%EC%96%B4",
+    )
+    page.locator('[data-testid="studio-submit"]').click()
+    page.wait_for_selector('[data-testid="viewer"]', timeout=45000)
+    settle(page, 700)
+    created = page.locator(".cover-hook").inner_text().strip()
+    check("C: 기사 링크로 카드 생성", "주 4일제" in created, created)
+    check("C: 만든 카드는 바로 열림", page.locator('[data-testid="viewer"]').count() == 1)
+    page.screenshot(path=str(SHOTS / "09-mobile-created.png"))
+    page.locator('[data-testid="close-viewer"]').click()
     settle(page, 500)
 
-    panel = page.get_by_test_id("draft-panel").inner_text()
-    check("B: AI 초안 배지", "실시간 AI" in panel)
-    check("B: 한 줄 팩폭 반영", "무료로 키운 이용자" in page.locator("#kicker").input_value())
-    check("B: 헤드라인 AI 결과", "수수료 1.8%" in page.locator("#headline").input_value())
-    check("B: 3줄 요약 AI 결과", "1.8%에서 1.8%로" in "".join(page.locator("textarea").nth(i).input_value() for i in range(3)) or "가맹점" in page.locator("textarea").nth(1).input_value())
-    check("B: 속마음 2건 노출", panel.count("업계인 속마음 2건") == 1)
-    check("B: 찬반 포인트 노출", "찬성 쪽 논리" in panel and "반대 쪽 논리" in panel)
-    page.screenshot(path=str(SHOTS / "17-desktop-editor-ai.png"), full_page=True)
+    # 한 줄 이슈로도 만들 수 있는지
+    page.locator('[data-testid="open-studio"]').click()
+    page.fill('[data-testid="studio-input"]', "요즘 편의점 도시락 가격이 왜 이렇게 올랐는지 궁금하다")
+    page.locator('[data-testid="studio-submit"]').click()
+    page.wait_for_selector('[data-testid="viewer"]', timeout=45000)
+    settle(page, 600)
+    check("C: 한 줄 이슈로도 카드 생성", page.locator(".cover-hook").count() == 1)
+    page.locator('[data-testid="close-viewer"]').click()
+    settle(page, 300)
 
-    # 두 번째 속마음으로 교체
-    insider_buttons = page.locator("[data-testid=draft-panel] button[aria-pressed]")
-    check("B: 속마음 선택 버튼 2개", insider_buttons.count() == 2, str(insider_buttons.count()))
-    if insider_buttons.count() == 2:
-        insider_buttons.nth(1).click()
-        settle(page, 300)
-        check("B: 속마음 B 선택 반영", "이탈 속도" in page.locator("#insider").input_value())
+    # 너무 짧은 입력은 서버로 보내지 않음(버튼 비활성)
+    page.locator('[data-testid="open-studio"]').click()
+    page.fill('[data-testid="studio-input"]', "짧")
+    check("C: 너무 짧은 입력은 막힘", page.locator('[data-testid="studio-submit"]').is_disabled())
+    page.locator('[data-testid="studio-input"]').press("Escape")
+    page.locator(".sheet-head .icon-btn").click()
+    settle(page, 300)
 
-    page.get_by_role("button", name="지금 발행하기").click()
-    page.wait_for_url(re.compile(r"#/issue/issue-"), timeout=15000)
-    settle(page, 700)
-    headline = page.locator("h1").first.inner_text()
-    issue_id = page.url.split("#/issue/")[-1]
-    check("B: 발행 후 상세 열림", "수수료" in headline, headline)
-    check("B: 찬반 포인트 카드 게시", page.get_by_test_id("debate-card").count() == 1)
-    check("B: 두 번째 속마음 게시", page.get_by_text("같은 이슈, 다른 시각").count() == 1)
-    check("B: 동기화 대기 없음", page.get_by_test_id("status-pending").count() == 0)
-    page.screenshot(path=str(SHOTS / "18-desktop-shared-detail.png"), full_page=True)
+    # 서버 가드: 구글 뉴스 링크 거부 / 사설망 차단
+    status, payload = api_json(port, "/api/briefing", {"url": "https://news.google.com/rss/articles/abc"})
+    check("C: 구글 뉴스 링크는 본문을 못 읽는다고 안내", status == 400 and payload.get("error") == "google_news_link", str(payload)[:120])
 
-    # 서버에 실제로 저장됐는지 (다른 브라우저에서 확인)
-    ctx2 = browser.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
-    page2 = ctx2.new_page()
-    attach(page2, "B-other")
-    page2.goto(f"{base}?issue={issue_id}", wait_until="networkidle")
-    settle(page2, 900)
-    check("B: 다른 브라우저에서 공유 링크로 열림", "수수료" in page2.locator("h1").first.inner_text())
-    check("B: 다른 브라우저도 공용 DB 표시", "실시간 공용 DB" in page2.get_by_test_id("status-db").inner_text())
+    status, payload = api_json(port, "/api/briefing", {"text": "짧"})
+    check("C: 짧은 입력은 400", status == 400 and payload.get("error") == "too_short", str(payload)[:80])
 
-    page2.locator("aside").get_by_role("button", name=re.compile("불타는 중")).click()
-    settle(page2, 800)
-    check("B: 다른 브라우저 투표 반영", "내 선택" in page2.locator("aside").inner_text())
-    box2 = page2.get_by_label("한 줄 팩폭 남기기")
-    box2.fill("결제망 투자 계획부터 공개했으면 수수료도 이렇게까지 안 올랐다.")
-    page2.get_by_role("button", name="등록").click()
-    settle(page2, 900)
-
-    # 원래 브라우저에서 새로고침 → 다른 사람의 표·팩폭이 보인다
-    page.get_by_role("button", name="공용 보드 새로고침").click()
-    settle(page, 1200)
-    check("B: 공용 보드 새로고침 후 팩폭 보임", "결제망 투자 계획" in page.locator("body").inner_text())
-    check("B: 남의 팩폭은 '나 ·'로 표시되지 않음", page.get_by_text(re.compile("나 · 익명")).count() == 0)
-    page.screenshot(path=str(SHOTS / "19-desktop-synced.png"), full_page=True)
-
-    # 데모 이슈의 기준값은 두 브라우저에서 동일하게 보인다
-    page.get_by_role("button", name="뉴스룸").first.click()
-    settle(page, 700)
-    hero_a = temp_number(page.locator("section[aria-label='오늘의 최고 온도 이슈'] .nums.serif").first.inner_text())
-    check("B: 데모 이슈 기준 온도 유지(94)", hero_a >= 90, str(hero_a))
-
-    # ── 무중단 폴백: 서버가 잠깐 죽어도 발행은 기기에 남고, 연결되면 자동으로 다시 올라간다
-    def block_posts(route):
-        if route.request.method == "POST":
-            route.abort()
-        else:
-            route.continue_()
-
-    console_state["tag"] = "B-offline"  # 일부러 POST를 끊는 구간
-    page.route("**/api/board", block_posts)
-    page.get_by_role("button", name="에디터 스튜디오").first.click()
-    settle(page, 350)
-    page.get_by_role("button", name="예시 메모 넣기").click()
-    page.get_by_role("button", name=re.compile("AI로 팩폭 초안 생성")).click()
-    page.wait_for_selector("[data-testid=draft-panel]", timeout=15000)
-    settle(page, 400)
-    page.get_by_role("button", name="지금 발행하기").click()
-    page.wait_for_url(re.compile(r"#/issue/issue-"), timeout=15000)
-    settle(page, 800)
-    pending_badge = page.get_by_test_id("status-pending")
-    check("B: 서버 장애 시 '동기화 대기' 표시", pending_badge.count() == 1)
-    check("B: 장애 안내 토스트", "서버에 닿지 않아" in page.get_by_role("status").inner_text())
-    check("B: 장애 중에도 이슈는 화면에 있음", "수수료" in page.locator("h1").first.inner_text())
-    offline_id = page.url.split("#/issue/")[-1]
-    page.unroute("**/api/board", block_posts)
-    console_state["tag"] = "B"
-    page.wait_for_function("!document.querySelector('[data-testid=status-pending]')", timeout=30000)
-    check("B: 연결되면 자동 재전송(대기 0)", page.get_by_test_id("status-pending").count() == 0)
-
-    ctx3 = browser.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
-    page3 = ctx3.new_page()
-    attach(page3, "B-retry")
-    page3.goto(f"{base}?issue={offline_id}", wait_until="networkidle")
-    settle(page3, 900)
-    check("B: 재전송된 이슈가 공용 보드에 존재", "수수료" in page3.locator("h1").first.inner_text())
-    ctx3.close()
-    ctx2.close()
     ctx.close()
 
 
-# ---------------------------------------------------------------- scenario C
+def scenario_ssrf(port: int):
+    """사설망 차단은 실제 배포 설정(--allow-local=off)에서만 켜지므로 그 서버로 확인합니다."""
+    status, payload = api_json(port, "/api/briefing", {"url": "http://169.254.169.254/latest/meta-data/"})
+    check("C: 클라우드 메타데이터 주소 차단(SSRF)", status == 400 and payload.get("error") == "article_unreadable", f"{status} {str(payload)[:100]}")
+    status, payload = api_json(port, "/api/briefing", {"url": f"http://127.0.0.1:{port}/fake-article/x"})
+    check("C: 사설망(127.0.0.1) 주소 차단", status == 400, f"{status} {str(payload)[:100]}")
+    status, payload = api_json(port, "/api/briefing", {"url": "file:///etc/passwd"})
+    check("C: http(s) 아닌 주소 차단", status == 400, f"{status} {str(payload)[:80]}")
 
 
-def scenario_no_key(base: str, browser) -> None:
-    print("\n=== C. 공용 DB + AI 키 없음 ===")
-    ctx = browser.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
-    page = ctx.new_page()
-    attach(page, "C")
+# ---------------------------------------------------------------- scenario D (키 없음)
+
+def scenario_headline_only(port: int, browser):
+    base = f"http://127.0.0.1:{port}/"
+    ctx = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
+    page = attach(ctx.new_page(), "D")
     page.goto(base, wait_until="networkidle")
-    settle(page, 800)
-
-    check("C: 상태 배지 = 실시간 공용 DB", "실시간 공용 DB" in page.get_by_test_id("status-db").inner_text())
-    check("C: AI 배지 = 규칙 요약", "규칙 요약" in page.get_by_test_id("status-ai").inner_text())
-
-    page.get_by_role("button", name="에디터 스튜디오").first.click()
-    settle(page, 400)
-    page.get_by_role("button", name="예시 메모 넣기").click()
-    page.get_by_role("button", name=re.compile("AI로 팩폭 초안 생성")).click()
-    page.wait_for_selector("[data-testid=draft-panel]", timeout=15000)
-    settle(page, 400)
-    panel = page.get_by_test_id("draft-panel").inner_text()
-    check("C: 규칙 요약으로 폴백", "규칙 요약" in panel and "실시간 AI ·" not in panel)
-    check("C: 폴백 사유 표시", "AI 키" in panel or "키가 없" in panel, panel[:120])
-    check("C: 폴백 결과 헤드라인", "페이퍼백" in page.locator("#headline").input_value())
-    page.screenshot(path=str(SHOTS / "20-desktop-editor-fallback.png"), full_page=True)
-
-    # 서버 함수 자체도 키가 없으면 501 no_key 로 정직하게 답한다(앱은 이 경로를 부르지 않고 규칙 요약으로 간다)
-    resp = ctx.request.post(
-        f"{base}api/briefing",
-        data={"body": "가맹점 수수료를 1.2%에서 1.8%로 올린 결제사 이야기. 투자 계획은 공개하지 않았다."},
-    )
-    body = resp.json()
-    check("C: /api/briefing 501 no_key", resp.status == 501 and body.get("error") == "no_key", f"{resp.status} {body}")
-    board = ctx.request.get(f"{base}api/board?voterId=vtest000000")
-    board_body = board.json()
-    check(
-        "C: /api/board 모드 = shared/redis",
-        board.status == 200 and board_body.get("mode") == "shared" and board_body.get("store") == "redis",
-        str(board_body)[:150],
-    )
-    ctx.close()
-
-
-def scenario_gemini(base: str, browser) -> None:
-    print("\n=== D. 무료 Gemini 키(AQ.…) 실시간 AI ===")
-    ctx = browser.new_context(viewport={"width": 1440, "height": 1000}, locale="ko-KR")
-    page = ctx.new_page()
-    attach(page, "D")
-    page.goto(base, wait_until="networkidle")
-    settle(page, 900)
-
-    check("D: 상태 배지 = 실시간 공용 DB", "실시간 공용 DB" in page.get_by_test_id("status-db").inner_text())
-    check("D: AI 배지 = 실시간 AI", "실시간 AI" in page.get_by_test_id("status-ai").inner_text())
-
-    health = ctx.request.get(f"{base}api/briefing").json()
-    check("D: /api/briefing provider=gemini", health.get("provider") == "gemini" and health.get("ai") is True, str(health)[:160])
-    check("D: /api/briefing 기본 모델 gemini-3.8-flash", health.get("model") == "gemini-3.8-flash", str(health)[:160])
-    check("D: 키 값은 내려오지 않음", "AQ.local-test-key" not in str(health), str(health)[:160])
-
-    page.get_by_role("button", name="에디터 스튜디오").first.click()
-    page.wait_for_url(re.compile(r"#/editor"))
-    settle(page, 400)
-    page.get_by_role("button", name="예시 메모 넣기").click()
-    page.get_by_role("button", name=re.compile("AI로 팩폭 초안 생성")).click()
-    page.wait_for_selector("[data-testid=draft-panel]", timeout=20000)
+    page.wait_for_selector('[data-testid="feed-card"]', timeout=20000)
     settle(page, 500)
-    panel = page.get_by_test_id("draft-panel").inner_text()
-    check("D: AI 초안 배지", "실시간 AI" in panel, panel[:120])
-    check("D: 헤드라인 AI 결과", "수수료 1.8%" in page.locator("#headline").input_value())
-    check("D: 한 줄 팩폭 AI 결과", "무료로 키운 이용자" in page.locator("#kicker").input_value())
-    check("D: thought 파트 섞이지 않음", "JSON 객체를 만들어야" not in page.locator("#headline").input_value())
-    page.screenshot(path=str(SHOTS / "21-desktop-editor-gemini.png"), full_page=True)
 
-    # 서버가 실제로 Gemini 규격으로 보냈는지
-    state = ctx.request.get(f"{base}__state").json()
-    sent = state.get("geminiRequest") or {}
-    check("D: 모델 경로 gemini-3.8-flash", sent.get("model") == "gemini-3.8-flash", str(sent.get("model")))
-    check("D: x-goog-api-key 헤더로 키 전달", sent.get("headerKey") == "AQ.local-test-key", str(sent.get("headerKey")))
-    check("D: ?key=로도 키 전달", sent.get("queryKey") == "AQ.local-test-key", str(sent.get("queryKey")))
-    body = sent.get("body") or {}
-    check(
-        "D: systemInstruction 전달",
-        "수석 에디터" in json.dumps(body.get("systemInstruction", {}), ensure_ascii=False),
-    )
-    check(
-        "D: generationConfig = JSON 모드",
-        (body.get("generationConfig") or {}).get("responseMimeType") == "application/json",
-        json.dumps(body.get("generationConfig"), ensure_ascii=False)[:160],
-    )
-    check(
-        "D: 온도 0.4",
-        (body.get("generationConfig") or {}).get("temperature") == 0.4,
-        json.dumps(body.get("generationConfig"), ensure_ascii=False)[:160],
-    )
-    prompt_text = json.dumps(body.get("contents", []), ensure_ascii=False)
-    check("D: 본문이 프롬프트에 포함", "가맹점" in prompt_text, prompt_text[:160])
+    body = page.inner_text("body")
+    check("D: AI 키 없어도 실제 헤드라인 카드가 뜸", page.locator('[data-testid="feed-card"]').count() >= 3)
+    check("D: 'AI 없이 제목' 표시", "AI 없이 제목" in body or "헤드라인만" in body)
+    check("D: 무엇이 꺼졌는지 안내", page.locator('[data-testid="notice"]').count() == 1, page.locator('[data-testid="notice"]').inner_text()[:80] if page.locator('[data-testid="notice"]').count() else "없음")
+    check("D: 측정 안 된 온도는 '–'로 정직하게", page.locator(".temp.is-unmeasured").count() >= 1)
+    page.screenshot(path=str(SHOTS / "10-mobile-headline-only.png"), full_page=True)
+
+    open_viewer(page)
+    go_next(page)
+    check("D: 팩트 카드에 원문 안내", "원문" in page.locator('[data-testid="slide-2"]').inner_text())
+    check("D: 팩트 카드 안내 문구(키 없음)", "AI 요약이 꺼져" in page.locator('[data-testid="slide-2"]').inner_text())
+    go_next(page)
+    check("D: 입장 비교가 없으면 숨기지 않고 설명", "없어요" in page.locator('[data-testid="slide-3"]').inner_text())
+    go_next(page)
+    page.locator('[data-testid="vote-a"]').click()
+    page.wait_for_selector('[data-testid="result-a"]', timeout=8000)
+    check("D: 키가 없어도 투표는 동작", page.locator('[data-testid="vote-a"]').get_attribute("aria-pressed") == "true")
     ctx.close()
 
+
+# ---------------------------------------------------------------- scenario E (정적)
+
+def scenario_static(port: int, browser):
+    base = f"http://127.0.0.1:{port}/"
+    ctx = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
+    page = attach(ctx.new_page(), "E")
+    requests: list[str] = []
+    page.on("request", lambda request: requests.append(request.url) if "/api/" in request.url else None)
+    page.goto(base, wait_until="networkidle")
+    settle(page, 800)
+    check("E: 정적 배포 안내 표시", page.locator('[data-testid="static-notice"]').count() == 1)
+    check("E: 정적 배포에서 /api 요청 없음", len(requests) == 0, str(requests[:3]))
+    check("E: 안내에 실시간 주소", "issue-factbomb-board.vercel.app" in page.inner_text("body"))
+    page.screenshot(path=str(SHOTS / "11-mobile-static.png"))
+    ctx.close()
+
+
+# ---------------------------------------------------------------- scenario F (데스크톱)
+
+def scenario_desktop(base: str, browser):
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900}, device_scale_factor=1)
+    page = attach(ctx.new_page(), "F")
+    page.goto(base, wait_until="networkidle")
+    page.wait_for_selector('[data-testid="feed-card"]', timeout=20000)
+    settle(page, 600)
+    check("F: 데스크톱 가로 넘침 없음", no_overflow(page))
+    cols = page.evaluate(
+        "getComputedStyle(document.querySelector('.grid')).gridTemplateColumns.split(' ').length"
+    )
+    check("F: 데스크톱 3열 카드 그리드", cols >= 3, f"{cols}열")
+    page.screenshot(path=str(SHOTS / "02-desktop-feed.png"), full_page=True)
+
+    open_viewer(page)
+    box = page.locator(".viewer-shell").bounding_box()
+    check("F: 카드뉴스는 폰 크기 프레임", bool(box) and 380 <= box["width"] <= 470, str(box))
+    page.screenshot(path=str(SHOTS / "02b-desktop-viewer.png"))
+    goto_slide(page, 3)
+    page.locator('[data-testid="vote-b"]').click()
+    page.wait_for_selector('[data-testid="result-b"]', timeout=8000)
+    settle(page, 500)
+    page.screenshot(path=str(SHOTS / "02c-desktop-vote.png"))
+    ctx.close()
+
+
+# ---------------------------------------------------------------- API 단위 확인
+
+def api_checks(port: int):
+    status, payload = api_json(port, "/api/trending")
+    issues = payload.get("issues") or []
+    check("API: /api/trending 200", status == 200 and payload.get("ok") is True)
+    check("API: 7개 피드 모두 수집", len(payload.get("feeds") or []) == 7 and all(f.get("ok") for f in payload["feeds"]))
+    check("API: 카드 4건 이상", len(issues) >= 4, str(len(issues)))
+    check(
+        "API: 모든 카드에 원문 URL·출처·발행시각",
+        all(issue.get("url", "").startswith("http") and issue.get("source") and issue.get("publishedAt") for issue in issues),
+    )
+    check("API: 카드에 4장 구성 요소(훅·팩트2·양쪽입장·투표)", all(
+        len(issue.get("hook", "")) > 4
+        and len(issue.get("facts") or []) == 2
+        and (issue.get("sides") or {}).get("a")
+        and (issue.get("sides") or {}).get("b")
+        and issue.get("poll", {}).get("question")
+        for issue in issues
+    ))
+    check("API: 카테고리 값이 정해진 5종", {issue["category"] for issue in issues} <= {"work", "mz", "money", "tech", "culture"})
+    check("API: 온도 0~100", all(isinstance(issue.get("temp"), int) and 0 <= issue["temp"] <= 100 for issue in issues))
+    check("API: 지어낸 기사 없음(모두 테스트 피드 제목)", all("http://127.0.0.1" in issue["url"] for issue in issues))
+
+    fid = issues[0]["id"]
+    status, payload = api_json(port, f"/api/trending?issue={fid}")
+    check("API: 카드 하나 다시 꺼내기(공유 링크)", status == 200 and payload.get("issue", {}).get("id") == fid)
+    status, payload = api_json(port, "/api/trending?issue=doesnotexist123")
+    check("API: 없는 카드는 404", status == 404)
+
+    status, payload = api_json(
+        port,
+        "/api/poll",
+        {"action": "vote", "issueId": issues[0]["id"], "choice": "c", "voterId": "tester-abcdef"},
+    )
+    check("API: 잘못된 선택은 400", status == 400 and payload.get("error") == "bad_choice", str(payload)[:100])
+
+    status, payload = api_json(
+        port,
+        "/api/poll",
+        {"action": "vote", "issueId": issues[0]["id"], "choice": "a", "voterId": "tester-abcdef"},
+    )
+    check("API: 투표 저장", status == 200 and payload.get("poll", {}).get("counts", {}).get("a") == 1, str(payload)[:120])
+
+    status, payload = api_json(port, f"/api/poll?ids={issues[0]['id']}&voterId=tester-abcdef")
+    poll = (payload.get("polls") or {}).get(issues[0]["id"], {})
+    check("API: 내 표가 'my'로만 돌아옴", poll.get("my") == "a" and "voters" not in poll, str(poll)[:120])
+
+    status, payload = api_json(port, "/api/board")
+    check("API: 제거한 /api/board는 404", status == 404)
+
+    import urllib.request
+
+    state = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/__state", timeout=10))
+    keys = list((state.get("redis") or {}).keys())
+    card_keys = [key for key in keys if key.startswith("issue-thermo:issue:v1:")]
+    check("API: 공유 카드를 카드별로 따로 보관(캐시가 바뀌어도 열림)", len(card_keys) >= 4, str(keys[:5]))
+    check("API: 투표 집계 키 저장", any(key.startswith("issue-thermo:polls:") for key in keys), str(keys[:5]))
+
+
+# ------------------------------------------------------------------- main
 
 def main() -> int:
-    build()
-    # 서버는 시나리오 하나씩 띄우고 내립니다(좁은 환경에서 node 서버 4개 + chromium이 동시에 뜨면 스레드 한도에 걸립니다).
-    plan = [
-        ("A", dict(port=4185, dist="dist-static", api="off", store="memory", ai="off"), scenario_static),
-        ("B", dict(port=4186, dist="dist", api="on", store="redis", ai="on"), scenario_shared),
-        ("D", dict(port=4188, dist="dist", api="on", store="redis", ai="gemini"), scenario_gemini),
-        ("C", dict(port=4187, dist="dist", api="on", store="redis", ai="off"), scenario_no_key),
-    ]
-    only = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--only=")), "")
+    SHOTS.mkdir(parents=True, exist_ok=True)
+    for old in SHOTS.glob("*.png"):
+        old.unlink()
+
+    print("== 빌드 ==")
+    subprocess.run(["npm", "run", "build"], cwd=ROOT, env=ENV, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(
+        ["npx", "vite", "build", "--outDir", "dist-static"],
+        cwd=ROOT,
+        env={**ENV, "VITE_STATIC_ONLY": "1"},
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+
+    port_a, port_d, port_e, port_s = 4191, 4192, 4193, 4194
+    servers = []
     try:
+        print("== 서버 기동 ==")
+        servers.append(start_server(port_a, dist="dist", api="on", store="redis", ai="demo", feeds="on"))
+        servers.append(start_server(port_d, dist="dist", api="on", store="memory", ai="off", feeds="on"))
+        servers.append(start_server(port_e, dist="dist-static", api="off", store="memory", ai="off", feeds="on"))
+        servers.append(start_server(port_s, dist="dist", api="on", store="memory", ai="off", feeds="on", allow_local="off"))
+
         with sync_playwright() as p:
-            for name, server_args, scenario in plan:
-                if only and only.upper() != name:
-                    continue
-                base = start_server(server_args["port"], **{k: v for k, v in server_args.items() if k != "port"})
-                browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"])
-                try:
-                    scenario(base, browser)
-                finally:
-                    browser.close()
-                    stop_servers()
+            browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"])
+            try:
+                print("== A: 모바일 흐름 ==")
+                hook, _label_a, _label_b = scenario_mobile(f"http://127.0.0.1:{port_a}/", browser)
+                print("== B: 공용 투표 집계 ==")
+                scenario_shared(f"http://127.0.0.1:{port_a}/", browser, hook)
+            finally:
+                browser.close()
+
+            browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"])
+            try:
+                print("== C: 뉴스로 만들기 ==")
+                scenario_briefing(f"http://127.0.0.1:{port_a}/", browser, port_a)
+                print("== F: 데스크톱 ==")
+                scenario_desktop(f"http://127.0.0.1:{port_a}/", browser)
+            finally:
+                browser.close()
+
+            browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"])
+            try:
+                print("== D: AI 키 없음 ==")
+                scenario_headline_only(port_d, browser)
+                print("== E: 정적 배포 ==")
+                scenario_static(port_e, browser)
+            finally:
+                browser.close()
+
+        print("== C: 사설망 차단(배포 설정) ==")
+        scenario_ssrf(port_s)
+
+        print("== API 단위 확인 ==")
+        api_checks(port_a)
     finally:
-        stop_servers()
+        for proc, log in servers:
+            stop_server(proc)
+            log.close()
+
+    unique_errors = sorted({f"{tag} {text}" for tag, text in console_errors})
+    check("콘솔 에러·경고 0", len(unique_errors) == 0, " | ".join(unique_errors[:4]))
 
     passed = sum(1 for _, ok, _ in checks if ok)
-    # B-offline 구간은 일부러 POST를 abort시킨 실험이므로 그 구간의 ERR_FAILED만 제외합니다.
-    real_errors = [
-        (tag, text)
-        for tag, text in console_errors
-        if not (tag == "B-offline" and "net::ERR_FAILED" in text)
-    ]
-    print(f"\n{passed}/{len(checks)} checks passed")
-    print(f"CONSOLE ERRORS: {len(real_errors)} (의도적으로 끊은 오프라인 구간 {len(console_errors) - len(real_errors)}건 제외)")
-    for tag, text in real_errors:
-        print(f"  [{tag}] {text}")
-    return 0 if passed == len(checks) and not real_errors else 1
+    total = len(checks)
+    print(f"\n===== {passed}/{total} checks passed =====")
+    if passed != total:
+        print("\n실패 목록:")
+        for name, ok, detail in checks:
+            if not ok:
+                print(f"  - {name} {detail}")
+        return 1
+
+    print("스크린샷:", ", ".join(sorted(path.name for path in SHOTS.glob("*.png"))))
+    return 0
 
 
 if __name__ == "__main__":

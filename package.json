@@ -1,15 +1,15 @@
 {
   "name": "issue-factbomb-board",
   "private": true,
-  "version": "2.0.0",
+  "version": "3.0.0",
   "type": "module",
-  "description": "이슈온도계 — 한 줄 팩폭 이슈·트렌드 브리핑 보드. AI 팩폭 초안(Vercel /api/briefing)·공용 보드 발행·투표·팩폭 댓글(Vercel /api/board, Upstash/Supabase 선택)·공유 카드·에디터 발행 스튜디오",
+  "description": "이슈온도계 — 오늘의 실제 뉴스를 실시간으로 모아 카드뉴스 3장과 A/B 투표로 읽는 공개 이슈 보드. /api/trending(언론사 RSS 수집)·/api/briefing(기사 링크→카드)·/api/poll(A/B 투표 집계)",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && tsc -p tsconfig.api.json && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.api.json",
-    "bundle:api": "esbuild api/board.ts --bundle --format=esm --platform=node --target=node20 --outfile=.tmp/board.mjs && esbuild api/briefing.ts --bundle --format=esm --platform=node --target=node20 --outfile=.tmp/briefing.mjs",
+    "bundle:api": "esbuild api/trending.ts --bundle --format=esm --platform=node --target=node20 --outfile=.tmp/trending.mjs && esbuild api/briefing.ts --bundle --format=esm --platform=node --target=node20 --outfile=.tmp/briefing.mjs && esbuild api/poll.ts --bundle --format=esm --platform=node --target=node20 --outfile=.tmp/poll.mjs",
     "serve": "node scripts/serve.mjs",
     "verify": "python3 scripts/verify.py"
   },

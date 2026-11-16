@@ -1,81 +1,94 @@
-export type CategoryId = 'tech' | 'retail' | 'culture' | 'work';
+/** 앱 전체가 쓰는 데이터 모양. 서버(api/_shared, api/trending, api/briefing)와 같은 이름을 씁니다. */
 
-export type Reaction = 'hot' | 'watch' | 'cool';
+export type Category = "work" | "mz" | "money" | "tech" | "culture";
 
-export interface Category {
-  id: CategoryId;
-  label: string;
-  short: string;
-  /** tailwind text color utility for the category hue */
-  text: string;
-  soft: string;
-  dot: string;
-}
-
-/** 여론 찬반 포인트 — AI 초안이 만들어 준 양쪽 논리 */
-export interface Debate {
-  pro: string[];
-  con: string[];
+export interface IssuePoll {
+  question: string;
+  a: string;
+  b: string;
 }
 
 export interface Issue {
   id: string;
-  category: CategoryId;
-  /** headline as the newsroom would run it */
-  headline: string;
-  /** one-line context under the headline */
-  kicker: string;
-  /** exactly three sentences: what happened in 30 seconds */
-  summary: string[];
-  /** candid insider read — the reason this board exists */
-  insider: string;
-  /** second insider take (AI 초안의 두 번째 속마음) */
-  insiderAlt?: string;
-  /** 여론 찬반 포인트 (AI 초안에서 넘어온 경우) */
-  debate?: Debate;
-  /** editorial starting temperature, 0–100 */
-  baseTemp: number;
+  category: Category;
+  title: string;
   source: string;
+  url: string;
   publishedAt: number;
+  image: string;
+  hook: string;
+  kicker: string;
+  facts: string[];
+  sides: { a: string; b: string } | null;
+  poll: IssuePoll;
+  temp: number | null;
   tags: string[];
-  editorPick?: boolean;
-  /** true for issues published in this session */
-  fresh?: boolean;
+  ai: boolean;
 }
 
-export interface ReactionCounts {
-  hot: number;
-  watch: number;
-  cool: number;
+export interface FeedStatus {
+  name: string;
+  ok: boolean;
 }
 
-export interface Comment {
+export interface TrendingResponse {
+  ok: boolean;
+  mode?: "shared" | "local";
+  store?: string;
+  ai?: { provider: string; model: string } | null;
+  aiKey?: boolean;
+  generatedAt?: number;
+  stale?: boolean;
+  latencyMs?: number;
+  feeds?: FeedStatus[];
+  notice?: string;
+  issues?: Issue[];
+  error?: string;
+  message?: string;
+}
+
+export interface BriefingResponse {
+  ok: boolean;
+  engine?: "ai" | "headline";
+  ai?: { provider: string; model: string } | null;
+  issue?: Issue;
+  notice?: string;
+  error?: string;
+  message?: string;
+}
+
+export interface PollSnapshot {
   id: string;
-  issueId: string;
-  author: string;
-  text: string;
-  likes: number;
-  createdAt: number;
+  question: string;
+  a: string;
+  b: string;
+  counts: { a: number; b: number };
+  total: number;
+  my: "a" | "b" | null;
+  reactions: { text: string; at: number; tag: string }[];
 }
 
-/** 공용 보드에 아직 못 올린 작업 (연결되면 자동으로 다시 올립니다) */
-export type PendingAction =
-  | { kind: 'publish'; issue: Issue; at: number }
-  | { kind: 'vote'; issueId: string; reaction: Reaction; at: number }
-  | { kind: 'comment'; comment: Comment; at: number };
-
-export interface BoardSnapshot {
-  version: number;
-  issues: Issue[];
-  votes: Record<string, ReactionCounts>;
-  comments: Comment[];
-  myVotes: Record<string, Reaction>;
-  likedComments: string[];
-  outbox: PendingAction[];
+export interface PollsResponse {
+  ok: boolean;
+  mode?: "shared" | "local";
+  store?: string;
+  polls?: Record<string, PollSnapshot>;
+  poll?: PollSnapshot;
+  error?: string;
+  message?: string;
 }
 
-export type View =
-  | { name: 'feed' }
-  | { name: 'ranking' }
-  | { name: 'editor' }
-  | { name: 'issue'; id: string };
+export interface PollUi {
+  counts: { a: number; b: number };
+  my: "a" | "b" | null;
+  pending: boolean;
+  offline: boolean;
+}
+
+export const CATEGORY_META: Record<Category, { label: string; short: string; color: string; soft: string }> = {
+  work: { label: "직장·커리어", short: "직장", color: "#1f7a5c", soft: "#e4f2ec" },
+  mz: { label: "MZ·트렌드", short: "MZ", color: "#7040b8", soft: "#efe7fb" },
+  money: { label: "소비·경제", short: "소비", color: "#a65a1c", soft: "#fbeedf" },
+  tech: { label: "테크·AI", short: "테크", color: "#3753c4", soft: "#e9ecfc" },
+  culture: { label: "문화·연예", short: "문화", color: "#b03a6a", soft: "#fbe7f0" },
+};

@@ -1,260 +1,353 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Issue, View } from './types';
-import { useBoard, type BoardApi } from './hooks/useBoard';
-import { SiteHeader, type NavKey } from './components/SiteHeader';
-import { ConnectionStrip } from './components/ConnectionStrip';
-import { Ticker } from './components/Ticker';
-import { FeedPage } from './components/FeedPage';
-import { RankingPage } from './components/RankingPage';
-import { IssueDetail } from './components/IssueDetail';
-import { EditorStudio } from './components/EditorStudio';
-import { Footer } from './components/Footer';
-import { ShareModal } from './components/ShareModal';
-import { ApiKeyModal } from './components/ApiKeyModal';
-import { Toast } from './components/Toast';
-import { bestEntries } from './lib/selectors';
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Issue, PollSnapshot, TrendingResponse } from "./types";
+import {
+  STATIC_BUILD,
+  createBriefing,
+  emptyPoll,
+  fetchIssue,
+  fetchPolls,
+  fetchTrending,
+  sendReaction,
+  sendVote,
+} from "./lib/api";
+import { copyText, issueLink, shareIssue } from "./lib/share";
+import { Header } from "./components/Header";
+import { CardNewsViewer } from "./components/CardNewsViewer";
+import { FeedCard, HeroCard } from "./components/FeedCard";
+import { StudioSheet } from "./components/StudioSheet";
+import { Toast } from "./components/Toast";
 
-/** 공유 링크(?issue=…)와 해시 라우트(#/issue/…) 둘 다 받습니다. */
-function parseLocation(): View {
-  const sharedId = new URLSearchParams(window.location.search).get('issue');
-  if (sharedId) return { name: 'issue', id: sharedId };
-
-  const raw = window.location.hash.replace(/^#\/?/, '');
-  if (raw.startsWith('issue/')) {
-    return { name: 'issue', id: raw.slice('issue/'.length) };
-  }
-  if (raw === 'ranking') return { name: 'ranking' };
-  if (raw === 'editor') return { name: 'editor' };
-  return { name: 'feed' };
-}
-
-function hashFor(key: NavKey): string {
-  return key === 'feed' ? '#/' : `#/${key}`;
-}
+const LIVE_URL = "https://issue-factbomb-board.vercel.app";
 
 export default function App() {
-  const board = useBoard();
-  const [view, setView] = useState<View>(() => parseLocation());
-  const [shareIssueId, setShareIssueId] = useState<string | null>(null);
-  const [keyModal, setKeyModal] = useState(false);
-  const [toast, setToast] = useState<{ text: string; n: number } | null>(null);
+  const [doc, setDoc] = useState<TrendingResponse | null>(null);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [polls, setPolls] = useState<Record<string, PollSnapshot>>({});
+  const [extra, setExtra] = useState<Issue[]>([]);
+  const [viewerId, setViewerId] = useState<string | null>(null);
+  const [voting, setVoting] = useState(false);
+  const [studioOpen, setStudioOpen] = useState(false);
+  const [studioBusy, setStudioBusy] = useState(false);
+  const [studioError, setStudioError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
-  const notify = useCallback((text: string) => {
-    setToast((prev) => ({ text, n: (prev?.n ?? 0) + 1 }));
+  const loadPolls = useCallback(async (issues: Issue[]) => {
+    try {
+      const res = await fetchPolls(issues.map((issue) => issue.id));
+      if (res.ok && res.polls) setPolls((prev) => ({ ...prev, ...res.polls }));
+    } catch {
+      /* 투표 집계는 없어도 카드는 읽을 수 있습니다 */
+    }
   }, []);
+
+  const load = useCallback(
+    async (refresh: boolean) => {
+      if (STATIC_BUILD) {
+        setStatus("error");
+        setError("static");
+        return;
+      }
+      if (refresh) setRefreshing(true);
+      else setStatus("loading");
+      try {
+        const res = await fetchTrending({ refresh });
+        if (res.ok && res.issues && res.issues.length > 0) {
+          setDoc(res);
+          setStatus("ready");
+          setError(null);
+          void loadPolls(res.issues);
+        } else {
+          setError(res.message ?? "뉴스를 가져오지 못했어요.");
+          setStatus((prev) => (prev === "ready" ? "ready" : "error"));
+        }
+      } catch {
+        setError("뉴스 서버에 연결하지 못했어요. 잠시 뒤 다시 시도해 주세요.");
+        setStatus((prev) => (prev === "ready" ? "ready" : "error"));
+      } finally {
+        setRefreshing(false);
+      }
+    },
+    [loadPolls],
+  );
 
   useEffect(() => {
-    const onHashChange = () => {
-      setView(parseLocation());
-      window.scrollTo({ top: 0, behavior: 'auto' });
+    void load(false);
+  }, [load]);
+
+  /* 공유 링크(#/i/<id>)로 들어온 경우 */
+  useEffect(() => {
+    const sync = () => {
+      const match = location.hash.match(/^#\/i\/([A-Za-z0-9_-]{6,64})$/);
+      setViewerId(match ? match[1] : null);
     };
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
+    sync();
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
   }, []);
 
-  /** 공유 링크로 들어온 상태(?issue=)에서 이동하면 파라미터를 먼저 지워 해시 라우트를 살립니다. */
-  const goToHash = useCallback((hash: string) => {
-    if (window.location.search.length > 0) {
-      window.history.replaceState(null, '', `${window.location.pathname}${hash}`);
-      setView(parseLocation());
-      window.scrollTo({ top: 0, behavior: 'auto' });
-      return;
+  const issues = useMemo(() => {
+    const list = [...(doc?.issues ?? []), ...extra];
+    const seen = new Set<string>();
+    const unique = list.filter((issue) => (seen.has(issue.id) ? false : (seen.add(issue.id), true)));
+    return unique.sort((a, b) => (b.temp ?? -1) - (a.temp ?? -1) || b.publishedAt - a.publishedAt);
+  }, [doc, extra]);
+
+  const viewerIssue = useMemo(() => issues.find((issue) => issue.id === viewerId) ?? null, [issues, viewerId]);
+
+  /* 목록에 없는 카드(공유 링크로 바로 들어온 경우)는 서버에서 하나만 다시 꺼옵니다. */
+  useEffect(() => {
+    if (!viewerId || viewerIssue) return;
+    let cancelled = false;
+    fetchIssue(viewerId)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.ok && res.issue) {
+          setExtra((prev) => [res.issue as Issue, ...prev]);
+          void loadPolls([res.issue as Issue]);
+        } else {
+          setToast(res.message ?? "카드를 열 수 없어요.");
+          closeViewer();
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setToast("카드를 불러오지 못했어요.");
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewerId, viewerIssue, loadPolls]);
+
+  const openIssue = (issue: Issue) => {
+    setViewerId(issue.id);
+    history.replaceState(null, "", `#/i/${issue.id}`);
+    if (!polls[issue.id]) void loadPolls([issue]);
+  };
+
+  const closeViewer = () => {
+    history.replaceState(null, "", `${location.pathname}${location.search}`);
+    setViewerId(null);
+  };
+
+  const onVote = async (issue: Issue, choice: "a" | "b") => {
+    const current = polls[issue.id] ?? emptyPoll(issue);
+    const optimistic: PollSnapshot = {
+      ...current,
+      counts: {
+        a: current.counts.a + (choice === "a" ? 1 : 0) - (current.my === "a" ? 1 : 0),
+        b: current.counts.b + (choice === "b" ? 1 : 0) - (current.my === "b" ? 1 : 0),
+      },
+      my: choice,
+    };
+    optimistic.total = optimistic.counts.a + optimistic.counts.b;
+    setPolls((prev) => ({ ...prev, [issue.id]: optimistic }));
+    setVoting(true);
+    try {
+      const res = await sendVote(issue, choice);
+      if (res.ok && res.poll) setPolls((prev) => ({ ...prev, [issue.id]: res.poll as PollSnapshot }));
+      else throw new Error(res.message ?? "vote failed");
+    } catch {
+      setToast("연결이 없어 표가 이 기기에만 남았어요.");
+    } finally {
+      setVoting(false);
     }
-    window.location.hash = hash;
-  }, []);
+  };
 
-  const navigate = useCallback((key: NavKey) => goToHash(hashFor(key)), [goToHash]);
-
-  const openIssue = useCallback((id: string) => goToHash(`#/issue/${id}`), [goToHash]);
-
-  const shareIssue = useMemo(
-    () => (shareIssueId ? board.issueById(shareIssueId) : undefined),
-    [shareIssueId, board],
-  );
-
-  const shareComment = useMemo(() => {
-    if (!shareIssue) return undefined;
-    return bestEntries(
-      board.comments.filter((comment) => comment.issueId === shareIssue.id),
-      [shareIssue],
-      board.temps,
-      1,
-    )[0]?.comment;
-  }, [shareIssue, board.comments, board.temps]);
-
-  const handlePublish = useCallback(
-    async (input: Parameters<BoardApi['publish']>[0]) => {
-      const { issue, synced } = await board.publish(input);
-      notify(
-        synced
-          ? '발행 완료 — 공용 보드에 올렸습니다.'
-          : board.syncEnabled
-            ? '발행했습니다. 서버에 닿지 않아 이 기기에 보관했고, 연결되면 자동으로 다시 올립니다.'
-            : '발행 완료 — 이 브라우저에 저장했습니다. (로컬 체험 모드)',
-      );
-      openIssue(issue.id);
-      return issue;
-    },
-    [board, notify, openIssue],
-  );
-
-  const handleComment = useCallback(
-    (issueId: string, text: string) => {
-      if (text.trim().length === 0) {
-        notify('한 줄 팩폭을 입력해 주세요.');
-        return false;
+  const onReact = async (issue: Issue, text: string): Promise<boolean> => {
+    const current = polls[issue.id] ?? emptyPoll(issue);
+    try {
+      const res = await sendReaction(issue, text);
+      if (res.ok && res.poll) {
+        setPolls((prev) => ({ ...prev, [issue.id]: res.poll as PollSnapshot }));
+        return true;
       }
-      const comment = board.addComment(issueId, text);
-      if (!comment) return false;
-      notify(board.syncEnabled ? '팩폭을 등록했습니다. 좋아요로 순위가 올라갑니다.' : '팩폭을 남겼습니다. 이 브라우저에 저장됩니다.');
+      throw new Error(res.message ?? "reaction failed");
+    } catch {
+      setPolls((prev) => ({
+        ...prev,
+        [issue.id]: {
+          ...current,
+          reactions: [...current.reactions, { text, at: Date.now(), tag: "나" }].slice(-30),
+        },
+      }));
+      setToast("연결이 없어 반응이 이 기기에만 남았어요.");
       return true;
-    },
-    [board, notify],
-  );
+    }
+  };
 
-  const currentIssue: Issue | undefined =
-    view.name === 'issue' ? board.issueById(view.id) : undefined;
+  const onShare = async (issue: Issue) => {
+    const result = await shareIssue(issue);
+    if (result === "shared") setToast("공유했어요.");
+    else if (result === "copied") setToast("카드 링크를 복사했어요.");
+    else setToast("공유하지 못했어요. 주소창의 링크를 복사해 주세요.");
+  };
 
-  const rankingEntries = useMemo(
-    () => bestEntries(board.comments, board.issues, board.temps, board.comments.length),
-    [board.comments, board.issues, board.temps],
-  );
+  const onCopy = async (issue: Issue) => {
+    const ok = await copyText(`${issue.hook}\n${issueLink(issue)}`);
+    setToast(ok ? "링크를 복사했어요." : "복사하지 못했어요.");
+  };
+
+  const onSubmitStudio = async (input: { url?: string; text?: string }) => {
+    setStudioBusy(true);
+    setStudioError(null);
+    try {
+      const res = await createBriefing(input);
+      if (res.ok && res.issue) {
+        const created = res.issue;
+        setExtra((prev) => [created, ...prev]);
+        void loadPolls([created]);
+        setStudioOpen(false);
+        openIssue(created);
+        if (res.notice) setToast(res.notice);
+      } else {
+        setStudioError(res.message ?? "카드를 만들지 못했어요.");
+      }
+    } catch {
+      setStudioError("서버에 연결하지 못했어요. 잠시 뒤 다시 시도해 주세요.");
+    } finally {
+      setStudioBusy(false);
+    }
+  };
+
+  const feed = issues.slice(1);
+  const hero = issues[0];
 
   return (
-    <div className="flex min-h-dvh flex-col bg-paper">
-      <SiteHeader view={view} onNavigate={navigate} issueCount={board.issues.length} />
-      <ConnectionStrip
-        status={board.status}
-        mode={board.mode}
-        store={board.store}
-        syncEnabled={board.syncEnabled}
-        pending={board.pending}
-        notice={board.notice}
-        ai={board.ai}
-        onOpenKey={() => setKeyModal(true)}
-        onRefresh={() => {
-          board.refresh();
-          notify('공용 보드를 새로 읽었습니다.');
-        }}
+    <div className="app">
+      <Header
+        generatedAt={doc?.generatedAt ?? null}
+        issueCount={issues.length}
+        feedOk={(doc?.feeds ?? []).filter((feedItem) => feedItem.ok).length}
+        feedTotal={(doc?.feeds ?? []).length}
+        aiOn={Boolean(doc?.ai)}
+        refreshing={refreshing}
+        onRefresh={() => void load(true)}
+        onOpenStudio={() => setStudioOpen(true)}
       />
-      {view.name === 'feed' ? (
-        <Ticker issues={board.issues} temps={board.temps} onOpenIssue={openIssue} />
-      ) : null}
 
-      <main className="flex-1">
-        {view.name === 'feed' ? (
-          <FeedPage
-            board={board}
-            onOpenIssue={openIssue}
-            onShare={(issue) => setShareIssueId(issue.id)}
-            onNavigate={navigate}
-          />
-        ) : null}
+      <main className="main">
+        {STATIC_BUILD ? (
+          <section className="panel" data-testid="static-notice">
+            <h2>이 주소는 정적 배포본이에요</h2>
+            <p>
+              실시간 뉴스 수집은 서버가 필요합니다. 지금 쓰실 주소는{" "}
+              <a href={LIVE_URL} target="_blank" rel="noreferrer noopener">
+                {LIVE_URL}
+              </a>
+              이에요. 그쪽에서 오늘의 실제 뉴스 카드와 투표가 동작합니다.
+            </p>
+          </section>
+        ) : status === "loading" ? (
+          <LoadingSkeleton />
+        ) : status === "error" || !hero ? (
+          <section className="panel" data-testid="error-panel">
+            <h2>오늘의 뉴스를 가져오지 못했어요</h2>
+            <p>{error ?? "잠시 뒤 다시 시도해 주세요."}</p>
+            <button type="button" className="cta" onClick={() => void load(true)}>
+              다시 시도
+            </button>
+          </section>
+        ) : (
+          <>
+            {doc?.notice && <p className="notice" data-testid="notice">{doc.notice}</p>}
 
-        {view.name === 'ranking' ? (
-          <RankingPage
-            entries={rankingEntries}
-            liked={board.likedComments}
-            onLike={board.toggleLike}
-            onOpenIssue={openIssue}
-            onBack={() => navigate('feed')}
-          />
-        ) : null}
+            <section className="hero-wrap">
+              <div className="hero-label">
+                <span className="hero-label-dot" aria-hidden="true" />
+                오늘 가장 뜨거운 이슈
+              </div>
+              <HeroCard issue={hero} poll={polls[hero.id] ?? null} onOpen={openIssue} />
+            </section>
 
-        {view.name === 'editor' ? (
-          <EditorStudio
-            onPublish={handlePublish}
-            onToast={notify}
-            ai={board.ai}
-            onOpenKey={() => setKeyModal(true)}
-            syncEnabled={board.syncEnabled}
-          />
-        ) : null}
+            <section className="feed">
+              <div className="feed-head">
+                <h2>오늘의 카드뉴스</h2>
+                <span>{feed.length}건 · 온도 높은 순</span>
+              </div>
+              <div className="grid">
+                {feed.map((issue, index) => (
+                  <FeedCard
+                    key={issue.id}
+                    issue={issue}
+                    index={index + 1}
+                    poll={polls[issue.id] ?? null}
+                    onOpen={openIssue}
+                  />
+                ))}
+              </div>
+            </section>
 
-        {view.name === 'issue' ? (
-          currentIssue ? (
-            <IssueDetail
-              issue={currentIssue}
-              temp={board.temps[currentIssue.id] ?? 0}
-              votes={board.votesOf(currentIssue.id)}
-              myVote={board.myVotes[currentIssue.id]}
-              comments={board.commentsOf(currentIssue.id)}
-              liked={board.likedComments}
-              related={board.issues
-                .filter((issue) => issue.category === currentIssue.category && issue.id !== currentIssue.id)
-                .sort((a, b) => (board.temps[b.id] ?? 0) - (board.temps[a.id] ?? 0))
-                .slice(0, 3)
-                .map((issue) => ({ issue, temp: board.temps[issue.id] ?? 0 }))}
-              onVote={(reaction) => board.vote(currentIssue.id, reaction)}
-              onLike={board.toggleLike}
-              onComment={(text) => handleComment(currentIssue.id, text)}
-              onShare={() => setShareIssueId(currentIssue.id)}
-              onBack={() => navigate('feed')}
-              onOpenIssue={openIssue}
-            />
-          ) : board.status === 'connecting' ? (
-            <div className="mx-auto w-full max-w-[1240px] px-4 py-24 text-center">
-              <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-line border-t-heat" />
-              <p className="serif mt-4 text-[16px] font-bold text-ink">공유된 이슈를 불러오는 중…</p>
-              <p className="mt-1.5 text-[12px] text-muted">공용 보드에서 이슈를 찾고 있습니다.</p>
-            </div>
-          ) : (
-            <div className="mx-auto w-full max-w-[1240px] px-4 py-24 text-center">
-              <p className="serif text-[20px] font-bold text-ink">이슈를 찾을 수 없습니다.</p>
-              <p className="mt-2 text-[12.5px] text-muted">
-                주소가 바뀌었거나 삭제된 이슈입니다. {board.syncEnabled ? '공용 보드에도 같은 주소의 이슈가 없습니다.' : '이 브라우저 기록에도 없습니다.'}
-              </p>
-              <button
-                type="button"
-                onClick={() => navigate('feed')}
-                className="mt-5 rounded-full bg-ink px-4 py-2 text-[12px] font-bold text-paper transition hover:bg-heat"
-              >
-                뉴스룸으로
-              </button>
-            </div>
-          )
-        ) : null}
+            <section className="how">
+              <h2>이렇게 씁니다</h2>
+              <ol>
+                <li>
+                  <b>1</b>
+                  <span>오늘 언론사 RSS에서 실제 기사를 긁어옵니다</span>
+                </li>
+                <li>
+                  <b>2</b>
+                  <span>AI가 한 줄 훅·팩트 2줄·양쪽 입장으로 카드 3장을 만듭니다</span>
+                </li>
+                <li>
+                  <b>3</b>
+                  <span>A vs B 투표하고 친구에게 링크로 보냅니다</span>
+                </li>
+              </ol>
+            </section>
+          </>
+        )}
       </main>
 
-      <Footer
-        onNavigate={navigate}
-        mode={board.syncEnabled ? board.mode : 'local'}
-        onReset={() => {
-          const ok = window.confirm(
-            board.syncEnabled
-              ? '이 기기의 기록(내 투표·내 팩폭·발행 표시)을 지웁니다. 공용 보드에 이미 올라간 글은 서버에 남습니다. 계속할까요?'
-              : '투표·팩폭·발행한 이슈를 모두 지우고 데모 데이터로 돌아갑니다. 계속할까요?',
-          );
-          if (!ok) return;
-          board.reset();
-          notify('이 기기의 보드 기록을 초기화했습니다.');
-          navigate('feed');
+      <footer className="foot">
+        <p className="foot-main">카드는 실제 언론사 기사로만 만듭니다. 원문 링크는 항상 카드에 붙습니다.</p>
+        <p className="foot-dim">
+          {doc?.ai ? `AI ${doc.ai.provider} · ${doc.ai.model}` : "AI 요약 꺼짐"} ·{" "}
+          {doc?.mode === "shared" ? "투표 집계 공용 저장" : "투표는 이 기기 기준"} · 이슈온도계
+        </p>
+      </footer>
+
+      {viewerIssue && (
+        <CardNewsViewer
+          issue={viewerIssue}
+          poll={polls[viewerIssue.id] ?? emptyPoll(viewerIssue)}
+          voting={voting}
+          onClose={closeViewer}
+          onVote={(choice) => void onVote(viewerIssue, choice)}
+          onReact={(text) => onReact(viewerIssue, text)}
+          onShare={() => void onShare(viewerIssue)}
+          onCopy={() => void onCopy(viewerIssue)}
+        />
+      )}
+
+      <StudioSheet
+        open={studioOpen}
+        busy={studioBusy}
+        error={studioError}
+        onClose={() => {
+          setStudioOpen(false);
+          setStudioError(null);
         }}
+        onSubmit={(input) => void onSubmitStudio(input)}
       />
 
-      {shareIssue ? (
-        <ShareModal
-          issue={shareIssue}
-          temp={board.temps[shareIssue.id] ?? 0}
-          votes={board.votesOf(shareIssue.id)}
-          topComment={shareComment}
-          onClose={() => setShareIssueId(null)}
-          onToast={notify}
-        />
-      ) : null}
+      <Toast message={toast} onDone={() => setToast(null)} />
+    </div>
+  );
+}
 
-      {keyModal ? (
-        <ApiKeyModal
-          ai={board.ai}
-          onSave={(key) => {
-            board.setPersonalAiKey(key);
-            notify(key.trim() ? 'AI 키를 이 브라우저에 저장했습니다.' : 'AI 키를 지웠습니다.');
-          }}
-          onClose={() => setKeyModal(false)}
-        />
-      ) : null}
-
-      <Toast key={toast?.n ?? 0} message={toast?.text ?? null} onDone={() => setToast(null)} />
+function LoadingSkeleton() {
+  return (
+    <div className="skeleton-wrap" data-testid="loading">
+      <div className="skeleton skeleton-hero" />
+      <div className="skeleton-head" />
+      <div className="grid">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="skeleton skeleton-card" />
+        ))}
+      </div>
+      <p className="skeleton-msg">오늘 언론사 RSS에서 기사를 모으고 있어요…</p>
     </div>
   );
 }
