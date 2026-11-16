@@ -4,9 +4,12 @@ import type { NavKey } from './SiteHeader';
 export function Footer({
   onNavigate,
   onReset,
+  mode,
 }: {
   onNavigate: (key: NavKey) => void;
   onReset: () => void;
+  /** 지금 어디에 저장되는지 푸터에서도 숨기지 않습니다. */
+  mode: 'shared' | 'local';
 }) {
   return (
     <footer className="mt-16 border-t border-line bg-paper-deep/50">
@@ -50,7 +53,9 @@ export function Footer({
         <div>
           <p className="mono text-[9.5px] uppercase tracking-[0.16em] text-faint">이 보드에 대하여</p>
           <p className="mt-3 text-[11.5px] leading-[1.7] text-muted">
-            투표·팩폭·발행한 이슈는 이 브라우저에만 저장됩니다. 서버로 나가지 않습니다.
+            {mode === 'shared'
+              ? '투표·팩폭·발행한 이슈는 공용 보드에 저장되어 링크를 받은 사람도 함께 봅니다. 개인 식별 정보는 저장하지 않고, 이 브라우저에는 익명 참여자 id만 남습니다.'
+              : '지금은 로컬 체험 모드입니다. 투표·팩폭·발행한 이슈가 이 브라우저에만 저장되고 서버로 나가지 않습니다.'}
           </p>
           <button
             type="button"

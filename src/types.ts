@@ -12,6 +12,12 @@ export interface Category {
   dot: string;
 }
 
+/** 여론 찬반 포인트 — AI 초안이 만들어 준 양쪽 논리 */
+export interface Debate {
+  pro: string[];
+  con: string[];
+}
+
 export interface Issue {
   id: string;
   category: CategoryId;
@@ -23,6 +29,10 @@ export interface Issue {
   summary: string[];
   /** candid insider read — the reason this board exists */
   insider: string;
+  /** second insider take (AI 초안의 두 번째 속마음) */
+  insiderAlt?: string;
+  /** 여론 찬반 포인트 (AI 초안에서 넘어온 경우) */
+  debate?: Debate;
   /** editorial starting temperature, 0–100 */
   baseTemp: number;
   source: string;
@@ -48,6 +58,12 @@ export interface Comment {
   createdAt: number;
 }
 
+/** 공용 보드에 아직 못 올린 작업 (연결되면 자동으로 다시 올립니다) */
+export type PendingAction =
+  | { kind: 'publish'; issue: Issue; at: number }
+  | { kind: 'vote'; issueId: string; reaction: Reaction; at: number }
+  | { kind: 'comment'; comment: Comment; at: number };
+
 export interface BoardSnapshot {
   version: number;
   issues: Issue[];
@@ -55,6 +71,7 @@ export interface BoardSnapshot {
   comments: Comment[];
   myVotes: Record<string, Reaction>;
   likedComments: string[];
+  outbox: PendingAction[];
 }
 
 export type View =

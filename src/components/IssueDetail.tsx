@@ -148,6 +148,49 @@ export function IssueDetail({
           </div>
 
           <div className="mt-5">
+            {issue.insiderAlt ? (
+              <section className="mb-4 rounded-2xl border border-line bg-surface p-5">
+                <div className="flex items-center justify-between">
+                  <h2 className="serif text-[16px] font-bold text-ink">같은 이슈, 다른 시각</h2>
+                  <span className="mono text-[9.5px] uppercase tracking-[0.16em] text-faint">second take</span>
+                </div>
+                <p className="mt-2 text-[13px] leading-[1.8] text-ink-2">
+                  <RichText text={issue.insiderAlt} />
+                </p>
+              </section>
+            ) : null}
+
+            {issue.debate ? (
+              <section className="mb-4 rounded-2xl border border-line bg-surface p-5" data-testid="debate-card">
+                <div className="flex items-center justify-between">
+                  <h2 className="serif text-[16px] font-bold text-ink">⚖️ 여론 찬반 포인트</h2>
+                  <span className="mono text-[9.5px] uppercase tracking-[0.16em] text-faint">both sides</span>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-xl border border-heat/20 bg-heat-soft/40 px-3.5 py-3">
+                    <p className="mono text-[9px] font-bold uppercase tracking-[0.14em] text-heat">찬성 쪽 논리</p>
+                    <ul className="mt-1.5 space-y-1.5 text-[12px] leading-relaxed text-ink-2">
+                      {issue.debate.pro.length > 0 ? (
+                        issue.debate.pro.map((line) => <li key={line}>+ {line}</li>)
+                      ) : (
+                        <li className="text-faint">정리된 논리가 없습니다.</li>
+                      )}
+                    </ul>
+                  </div>
+                  <div className="rounded-xl border border-cool/20 bg-cool-soft/40 px-3.5 py-3">
+                    <p className="mono text-[9px] font-bold uppercase tracking-[0.14em] text-cool">반대 쪽 논리</p>
+                    <ul className="mt-1.5 space-y-1.5 text-[12px] leading-relaxed text-ink-2">
+                      {issue.debate.con.length > 0 ? (
+                        issue.debate.con.map((line) => <li key={line}>− {line}</li>)
+                      ) : (
+                        <li className="text-faint">정리된 논리가 없습니다.</li>
+                      )}
+                    </ul>
+                  </div>
+                </div>
+              </section>
+            ) : null}
+
             <CommentBattle
               issueId={issue.id}
               comments={comments}

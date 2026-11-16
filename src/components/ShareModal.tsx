@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, Link2, X } from 'lucide-react';
+import { Copy, Download, Link2, X } from 'lucide-react';
 import type { Comment, Issue, ReactionCounts } from '../types';
 import { downloadDataUrl, renderShareCard, type CardFormat } from '../lib/share-card';
 import { tempBand } from '../lib/temp';
@@ -57,6 +57,31 @@ export function ShareModal({
   }, [onClose]);
 
   const band = tempBand(temp);
+
+  /** 공유 링크는 `?issue=` 파라미터라 정적 호스팅·Vercel 어디서나 그대로 열립니다. */
+  const shareUrl = `${window.location.origin}${window.location.pathname}?issue=${issue.id}`;
+
+  const shareText = [
+    `${issue.headline}`,
+    '',
+    ...issue.summary.slice(0, 3).map((line, index) => `${index + 1}. ${line}`),
+    '',
+    `🌡️ 여론 온도 ${temp}° · ${band.emoji} ${band.label}`,
+    issue.insider ? `💼 ${issue.insider}` : '',
+    '',
+    `이슈온도계에서 투표하기 → ${shareUrl}`,
+  ]
+    .filter((line) => line !== undefined)
+    .join('\n');
+
+  const copy = async (text: string, done: string, failed: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      onToast(done);
+    } catch {
+      onToast(failed);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[70] flex items-end justify-center bg-night/70 p-0 backdrop-blur-sm sm:items-center sm:p-6">
@@ -146,6 +171,16 @@ export function ShareModal({
             </div>
 
             <div>
+              <p className="mono mb-2 text-[9.5px] uppercase tracking-[0.16em] text-faint">공유 링크</p>
+              <p className="truncate rounded-xl border border-line bg-surface px-3 py-2 text-[11px] text-ink-2" title={shareUrl}>
+                {shareUrl.replace(/^https?:\/\//, '')}
+              </p>
+              <p className="mt-1.5 text-[10.5px] leading-relaxed text-faint">
+                이 주소로 들어오면 이슈 상세가 바로 열리고, 받은 사람도 같은 온도계에 투표할 수 있습니다.
+              </p>
+            </div>
+
+            <div>
               <p className="mono mb-2 text-[9.5px] uppercase tracking-[0.16em] text-faint">카드에 담기는 것</p>
               <ul className="space-y-1 text-[11px] leading-relaxed text-muted">
                 <li>· 헤드라인과 카테고리, 발행일</li>
@@ -170,18 +205,19 @@ export function ShareModal({
               </button>
               <button
                 type="button"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}#/issue/${issue.id}`);
-                    onToast('이슈 링크를 복사했습니다.');
-                  } catch {
-                    onToast('링크 복사가 차단되었습니다. 주소창의 URL을 복사해 주세요.');
-                  }
-                }}
+                onClick={() => void copy(shareUrl, '이슈 링크를 복사했습니다.', '링크 복사가 차단되었습니다. 위 주소를 길게 눌러 복사해 주세요.')}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-line bg-surface px-4 py-2.5 text-[12.5px] font-semibold text-ink-2 transition hover:border-line-strong"
               >
                 <Link2 className="h-4 w-4" />
                 이슈 링크 복사
+              </button>
+              <button
+                type="button"
+                onClick={() => void copy(shareText, '요약과 링크를 텍스트로 복사했습니다.', '텍스트 복사가 차단되었습니다.')}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-line bg-surface px-4 py-2.5 text-[12.5px] font-semibold text-ink-2 transition hover:border-line-strong"
+              >
+                <Copy className="h-4 w-4" />
+                요약 + 링크 텍스트 복사
               </button>
             </div>
           </div>

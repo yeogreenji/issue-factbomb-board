@@ -1,14 +1,17 @@
 {
   "name": "issue-factbomb-board",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
-  "description": "이슈온도계 — 한 줄 팩폭 이슈·트렌드 브리핑 보드. 3줄 요약·업계인 속마음·여론 온도계 투표·팩폭 댓글 배틀·공유 카드·에디터 발행 스튜디오",
+  "description": "이슈온도계 — 한 줄 팩폭 이슈·트렌드 브리핑 보드. AI 팩폭 초안(Vercel /api/briefing)·공용 보드 발행·투표·팩폭 댓글(Vercel /api/board, Upstash/Supabase 선택)·공유 카드·에디터 발행 스튜디오",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && tsc -p tsconfig.api.json && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.api.json",
+    "bundle:api": "esbuild api/board.ts --bundle --format=esm --platform=node --target=node20 --outfile=.tmp/board.mjs && esbuild api/briefing.ts --bundle --format=esm --platform=node --target=node20 --outfile=.tmp/briefing.mjs",
+    "serve": "node scripts/serve.mjs",
+    "verify": "python3 scripts/verify.py"
   },
   "dependencies": {
     "lucide-react": "^0.544.0",
