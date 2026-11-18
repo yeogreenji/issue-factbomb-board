@@ -39,12 +39,13 @@ import {
   type VercelRequest,
   type VercelResponse,
 } from "./_shared.js";
+import { buildPoll, ensureDistinctPolls } from "./debate.js";
 
 export const config = { maxDuration: 60 };
 
-const CACHE_KEY = "issue-thermo:trending:v2";
+const CACHE_KEY = "issue-thermo:trending:v3";
 /** 공유 링크로 받은 사람이 며칠 뒤에 열어도 카드가 남아 있도록, 카드 하나씩 따로 보관합니다. */
-const ISSUE_KEY_PREFIX = "issue-thermo:issue:v2:";
+const ISSUE_KEY_PREFIX = "issue-thermo:issue:v3:";
 const ISSUE_TTL_SECONDS = 60 * 60 * 24 * 7;
 const CACHE_TTL_SECONDS = 60 * 15;
 const CACHE_FRESH_MS = 12 * 60 * 1000;
@@ -250,6 +251,10 @@ function parseDate(raw: string): number {
 const DROP_TITLE =
   /(부고|인사\s*$|인사\s*=|포토\]|화보\]|\[영상\]|\[그래픽\]|사설\]|칼럼\]|\[오늘의 날씨\]|운세|주요\s*일정|정부\s*일정|공지|정치\s*일정|증시\s*전망|코스피\s*(?:마감|출발)|환율\s*(?:마감|출발)|오늘의\s*증시)/;
 
+/** 인스타에서 아무도 반응하지 않는 동네 단신·시세 기사 — 오늘의 이슈로 올리지 않습니다. */
+const MICRO_NEWS =
+  /(시세|경매|위판|어획|양식장|출하량|작황|개화|단풍|첫눈|물때|제철\s*(?:과일|음식|생선|수산물)|조개|굴\s*값|김장)/;
+
 /** 20~30대가 실제로 말하게 되는 키워드에 점수를 줍니다. */
 const HOT_KEYWORDS: { re: RegExp; weight: number; category?: Category }[] = [
   { re: /(MZ|Z세대|2030|청년|사회초년생|20대|30대)/, weight: 30, category: "mz" },
@@ -267,8 +272,16 @@ function scoreArticle(item: Article, now: number): number {
   if (item.summary.length > 70) score += 12;
   else if (item.summary.length > 30) score += 6;
   if (item.image) score += 5;
-  for (const rule of HOT_KEYWORDS) if (rule.re.test(item.title) || rule.re.test(item.summary)) score += rule.weight;
+  let relevant = false;
+  for (const rule of HOT_KEYWORDS) {
+    if (!rule.re.test(item.title) && !rule.re.test(item.summary)) continue;
+    score += rule.weight;
+    relevant = true;
+  }
+  // 2030이 말하게 되는 키워드가 하나도 없는 기사는 뒤로 밀립니다(조개 시세 같은 단신).
+  if (!relevant) score -= 22;
   if (DROP_TITLE.test(item.title)) score -= 90;
+  if (MICRO_NEWS.test(item.title)) score -= 60;
   if (item.title.length > 78) score -= 8;
   if (/^\[(속보|1보|2보)\]/.test(item.title)) score -= 4;
   return score;
@@ -379,6 +392,7 @@ const SYSTEM_PROMPT = `당신은 20~30대가 실제로 반응하는 뉴스를 �
 - 숫자는 기사에 적힌 그대로 씁니다(반올림·변형 금지). 숫자가 없으면 억지로 만들지 마세요.
 - 한 카드에 문장은 1~2개. 줄글 금지. 구어체 존댓말("~했어요", "~인데요")로 짧게.
 - 투표는 그 이슈를 읽은 사람이 바로 고를 수 있는 양자택일이어야 합니다. 정답이 없는 질문만 만드세요.
+- 투표 문항은 기사 속 갈등(누가 손해인지, 무엇이 부당한지, 어디까지 받아들일지)을 정면으로 묻습니다.
 
 카드 구성(각 이슈, 인스타 5장):
 1) hook: 표지 한 줄. 38자 이내. 숫자나 대비로 눈에 걸리게. 낚시성 왜곡 금지.
@@ -387,7 +401,11 @@ const SYSTEM_PROMPT = `당신은 20~30대가 실제로 반응하는 뉴스를 �
 4) background: "왜 지금 뜨나" 카드의 배경 2문장, 110자 이내. 앞서 무슨 일이 있었는지·왜 갑자기 화제인지.
 5) point: "핵심 쟁점" 한 줄. 55자 이내. 무엇을 두고 갈리는지 한 문장으로.
 6) sides: 갈리는 두 진영. labelA/labelB는 각 10자 이내(예: "찬성", "회사 쪽"), a/b는 각 55자 이내 주장.
-7) poll.question: 32자 이내 질문. poll.a / poll.b: 각 22자 이내 선택지.
+7) poll: 이 기사에서만 통하는 A/B 양자택일. 20~30대 댓글창에서 편 갈릴 만큼 팽팽하고 직관적으로.
+   - poll.question: 32자 이내. 기사 속 주제어를 넣은 도발적인 한 줄(예: "도시락 12% 인상, 그냥 넘어갈까?").
+   - poll.a / poll.b: 각 22자 이내. 한쪽으로 기운 단정형 문장(예: "소비자 기만, 즉시 불매" / "원가 상승 불가피, 기업 옹호").
+   - 금지: "찬성/반대", "이해된다/아니다", "어떻게 보시나요", "영향 있나요", "이미 체감 중", "아직 남 일" 처럼 어느 기사에나 붙는 말.
+   - 카드마다 질문·선택지가 완전히 달라야 합니다. 다른 이슈와 같은 문장을 재사용하면 실패입니다.
 8) temp: 지금 여론이 달아오른 정도 0~100 정수(사과·철회·논란·품절은 70 이상, 단순 발표는 30~50).
 9) category: work(직장·커리어) | mz(MZ·트렌드) | money(소비·경제) | tech(테크·AI) | culture(문화·연예) 중 하나.
 10) tags: 검색 키워드 3개(각 12자 이내, # 없이).
@@ -509,11 +527,19 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
     const pollB = cleanNewsText(pollRaw.b, 34);
     const point = cleanNewsText(card.point, 80) || cleanNewsText(pollRaw.question, 60);
     const background = cleanNewsText(card.background, 180) || fallbackBackground(item, facts);
+    const category = CATEGORIES.includes(categoryRaw) ? categoryRaw : item.hint;
+    // AI가 밋밋한 문항을 주거나 아예 없을 때를 대비해 이 기사 전용 문항을 항상 준비합니다.
+    const ownPoll = buildPoll({
+      title: item.title,
+      summary: item.summary,
+      body: item.body,
+      category,
+    });
 
     used.add(pick);
     issues.push({
       id: shortId(item.url),
-      category: CATEGORIES.includes(categoryRaw) ? categoryRaw : item.hint,
+      category,
       title: item.title,
       source: item.source,
       url: item.url,
@@ -527,8 +553,8 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
       sides: sideA && sideB ? { labelA, labelB, a: sideA.replace(/[.]$/, ""), b: sideB.replace(/[.]$/, "") } : null,
       poll:
         pollA && pollB
-          ? { question: cleanNewsText(pollRaw.question, 60) || "이 이슈, 어떻게 봐요?", a: pollA, b: pollB }
-          : { question: "이 뉴스, 내 일상에 영향 있나요?", a: "이미 체감 중", b: "아직 남 일" },
+          ? { question: cleanNewsText(pollRaw.question, 60) || ownPoll.question, a: pollA, b: pollB }
+          : ownPoll,
       temp: typeof card.temp === "undefined" ? null : clampInt(card.temp, 0, 100, 55),
       tags: cleanList(card.tags, 3, 16).map((tag) => tag.replace(/^#/, "")),
       ai: true,
@@ -555,7 +581,8 @@ function headlineCards(items: Article[]): Issue[] {
       background: fallbackBackground(item, facts),
       point: "",
       sides: null,
-      poll: { question: "이 뉴스, 내 일상에 영향 있나요?", a: "이미 체감 중", b: "아직 남 일" },
+      // 제목만으로도 그 기사에만 통하는 A/B를 만듭니다(카드마다 다른 문항).
+      poll: buildPoll({ title: item.title, summary: item.summary, body: item.body, category: item.hint }),
       temp: null,
       tags: [],
       ai: false,
@@ -606,6 +633,17 @@ async function collect(): Promise<TrendingDoc> {
   }
 
   if (issues.length === 0) issues = headlineCards(candidates);
+
+  // AI가 밋밋하거나 겹치는 A/B를 줬어도, 화면에는 카드마다 다른 문항만 나가게 마지막으로 맞춥니다.
+  const distinct = ensureDistinctPolls(
+    issues.map((issue) => ({
+      ...issue,
+      body: `${issue.facts.join(" ")} ${issue.background}`,
+    })),
+  );
+  distinct.forEach((entry, index) => {
+    issues[index].poll = entry.card.poll;
+  });
 
   const noticeParts: string[] = [];
   if (reachable < FEEDS.length) noticeParts.push(`언론사 ${FEEDS.length}곳 중 ${reachable}곳에서 받았습니다`);

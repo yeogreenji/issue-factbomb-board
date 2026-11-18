@@ -23,6 +23,7 @@ interface Props {
   poll: PollSnapshot;
   voting: boolean;
   localOnly?: boolean;
+  startIndex?: number;
   onClose: () => void;
   onVote: (choice: "a" | "b") => void;
   onComment: (side: "a" | "b", text: string) => Promise<boolean>;
@@ -38,6 +39,7 @@ export function CardNewsViewer({
   poll,
   voting,
   localOnly,
+  startIndex = 0,
   onClose,
   onVote,
   onComment,
@@ -47,7 +49,7 @@ export function CardNewsViewer({
   onCopyCaption,
   onToast,
 }: Props) {
-  const { index, wrapRef, trackRef, go, jump, handlers } = useSwipeDeck(SLIDE_COUNT);
+  const { index, wrapRef, trackRef, go, jump, handlers } = useSwipeDeck(SLIDE_COUNT, startIndex);
   const [saving, setSaving] = useState<"one" | "all" | null>(null);
   const [captionOpen, setCaptionOpen] = useState(false);
   const meta = CATEGORY_META[issue.category];
@@ -148,15 +150,17 @@ export function CardNewsViewer({
                     <div className="cn-cover-top">
                       <span className="cn-chip">{meta.label}</span>
                       <span className="cn-temp">
-                        <TempGauge temp={issue.temp} size="sm" />
+                        <TempGauge temp={issue.temp} size="lg" showBand />
                       </span>
                     </div>
                     <div className="cn-cover-text">
+                      <span className="cn-cover-eyebrow">TODAY&apos;S ISSUE</span>
                       <h2 className="cn-hook">{issue.hook}</h2>
                       <p className="cn-kicker">{issue.kicker}</p>
                     </div>
                     <p className="cn-cover-foot">
-                      {issue.source} · {timeAgo(issue.publishedAt)}
+                      <span>{issue.source}</span>
+                      <span className="cn-cover-swipe">밀어서 보기 →</span>
                     </p>
                   </section>
 
@@ -191,6 +195,9 @@ export function CardNewsViewer({
 
                   {/* ③ 배경·쟁점 */}
                   <section className="slide cn-issue" data-testid="slide-3" aria-hidden={index !== 2}>
+                    <span className="cn-ghost" aria-hidden="true">
+                      02
+                    </span>
                     <p className="cn-eyebrow">02 · 왜 지금 뜨나</p>
                     <div className="cn-issue-main">
                       <p className="cn-background">{issue.background || issue.kicker}</p>
@@ -232,9 +239,12 @@ export function CardNewsViewer({
 
                   {/* ⑤ 한 줄 팩폭 · 질문 */}
                   <section className="slide cn-question" data-testid="slide-5" aria-hidden={index !== 4}>
+                    <span className="cn-vote-ghost" aria-hidden="true">
+                      A/B
+                    </span>
                     <p className="cn-eyebrow">04 · 당신은?</p>
-                    <h3 className="cn-question-hook">{issue.point || issue.poll.question}</h3>
-                    <p className="cn-poll-q">{poll.question || issue.poll.question}</p>
+                    <h3 className="cn-question-hook">{poll.question || issue.poll.question}</h3>
+                    {issue.point && <p className="cn-poll-q">{issue.point}</p>}
                     <div className="cn-options">
                       {(["a", "b"] as const).map((key) => (
                         <span key={key} className="cn-option" data-mine={poll.my === key}>

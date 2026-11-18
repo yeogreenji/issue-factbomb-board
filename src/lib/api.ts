@@ -164,7 +164,7 @@ export async function fetchPolls(ids: string[], issues: Issue[] = []): Promise<P
     const res = await requestJson<PollsResponse>(`/api/poll?${query}`, { headers: { Accept: "application/json" } }, 20_000);
     const polls: Record<string, PollSnapshot> = {};
     for (const issue of issues) {
-      polls[issue.id] = mergeLocal(issue.id, res.polls?.[issue.id] ?? null);
+      polls[issue.id] = withIssueLabels(mergeLocal(issue.id, res.polls?.[issue.id] ?? null), issue);
     }
     for (const [id, poll] of Object.entries(res.polls ?? {})) {
       if (!polls[id]) polls[id] = mergeLocal(id, poll);
@@ -197,7 +197,7 @@ export async function sendVote(issue: Issue, choice: "a" | "b"): Promise<PollsRe
       },
       20_000,
     );
-    return { ...res, poll: mergeLocal(issue.id, res.poll ?? null) };
+    return { ...res, poll: res.poll ? withIssueLabels(mergeLocal(issue.id, res.poll), issue) : undefined };
   } catch {
     return { ok: false, localOnly: true };
   }
@@ -232,7 +232,7 @@ export async function sendComment(
     if (!res.ok || !res.poll) throw new Error(res.message ?? "comment failed");
     const mine = res.poll.comments.find((comment) => comment.id === id) ?? res.poll.comments.find((comment) => comment.mine);
     if (mine) updateLocal(issue.id, (current) => ({ ...current, comments: [mine, ...current.comments].slice(0, 20) }));
-    return { ...res, poll: mergeLocal(issue.id, res.poll) };
+    return { ...res, poll: withIssueLabels(mergeLocal(issue.id, res.poll), issue) };
   } catch {
     const pending: PollComment = {
       id,
@@ -280,10 +280,20 @@ export async function sendLike(issue: Issue, commentId: string): Promise<PollsRe
       20_000,
     );
     if (!res.ok || !res.poll) throw new Error("like failed");
-    return { ...res, poll: mergeLocal(issue.id, res.poll) };
+    return { ...res, poll: withIssueLabels(mergeLocal(issue.id, res.poll), issue) };
   } catch {
     return { ok: false, localOnly: true };
   }
+}
+
+/** 카드에 적힌 문항이 기준입니다 — 예전에 저장된 집계가 남아 있어도 화면에는 새 A/B가 나갑니다. */
+function withIssueLabels(poll: PollSnapshot, issue: Issue): PollSnapshot {
+  return {
+    ...poll,
+    question: issue.poll.question,
+    a: issue.poll.a,
+    b: issue.poll.b,
+  };
 }
 
 /** 서버 집계가 아직 없을 때 화면에 보여 줄 빈 값. */

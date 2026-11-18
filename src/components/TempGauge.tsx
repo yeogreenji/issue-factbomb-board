@@ -14,17 +14,23 @@ export function TempGauge({ temp, size = "sm", showBand = false }: Props) {
       <span className={`temp temp-${size} is-unmeasured`}>
         <span className="temp-num">–</span>
         <span className="temp-unit">°</span>
-        <span className="temp-band">온도 미측정</span>
+        {showBand && <span className="temp-band">온도 미측정</span>}
       </span>
     );
   }
   return (
-    <span className={`temp temp-${size}`} data-band={band(temp)}>
-      <Flame className="temp-flame" size={11} aria-hidden="true" />
+    <span
+      className={`temp temp-${size}`}
+      data-band={band(temp)}
+      style={{ ["--pct" as string]: `${Math.min(100, Math.max(0, temp))}%` }}
+      title={`논란 온도 ${temp}° · ${tempLabel(temp)}`}
+    >
+      <Flame className="temp-flame" size={size === "lg" ? 14 : 11} aria-hidden="true" />
       <span className="temp-num">{temp}</span>
       <span className="temp-unit">°</span>
       {showBand && <span className="temp-band">{tempLabel(temp)}</span>}
       <span className="temp-track" aria-hidden="true">
+        <span className="temp-fill" />
         <span className="temp-marker" style={{ left: `${Math.min(100, Math.max(0, temp))}%` }} />
       </span>
     </span>

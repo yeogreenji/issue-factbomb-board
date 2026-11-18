@@ -29,7 +29,7 @@ export function StudioSheet({ open, busy, error, onClose, onSubmit }: Props) {
         <div className="sheet-head">
           <div>
             <h2>뉴스로 만들기</h2>
-            <p>기사 링크를 넣으면 본문을 읽어 카드 3장으로 정리해요.</p>
+            <p>기사 링크를 넣으면 본문을 읽어 카드 5장으로 정리해요.</p>
           </div>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="닫기">
             <X size={18} />

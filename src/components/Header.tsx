@@ -29,10 +29,12 @@ export function Header({
       <div className="topbar-inner">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">
-            <Flame size={18} strokeWidth={2.4} />
+            <Flame size={19} strokeWidth={2.6} />
           </span>
           <div className="brand-text">
-            <h1>이슈온도계</h1>
+            <h1>
+              이슈온도계<span className="brand-dot">.</span>
+            </h1>
             <p>오늘의 뉴스를 인스타 카드뉴스로</p>
           </div>
         </div>
@@ -57,17 +59,18 @@ export function Header({
 
       <div className="live-strip">
         <span className="live-dot" aria-hidden="true" />
-        <span>
+        <span className="live-now">LIVE</span>
+        <span className="live-item">
           {todayLabel()} · {at} 기준
         </span>
         <span className="sep" aria-hidden="true" />
-        <span>{issueCount > 0 ? `이슈 ${issueCount}건` : "수집 중"}</span>
+        <span className="live-item">{issueCount > 0 ? `이슈 ${issueCount}건` : "수집 중"}</span>
         <span className="sep" aria-hidden="true" />
-        <span className={aiOn ? "live-ok" : "live-warn"}>{aiOn ? "AI 요약" : "헤드라인만"}</span>
+        <span className={`live-item ${aiOn ? "live-ok" : "live-warn"}`}>{aiOn ? "AI 요약" : "헤드라인만"}</span>
         {feedTotal > 0 && (
           <>
             <span className="sep" aria-hidden="true" />
-            <span className="live-dim">
+            <span className="live-item live-dim">
               언론사 {feedOk}/{feedTotal}
             </span>
           </>

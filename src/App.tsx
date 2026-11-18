@@ -14,6 +14,7 @@ import {
 import { copyText, issueLink, shareIssue } from "./lib/share";
 import { Header } from "./components/Header";
 import { CardNewsViewer } from "./components/CardNewsViewer";
+import { CardPreview } from "./components/CardPreview";
 import { FeedCard, HeroCard } from "./components/FeedCard";
 import { StudioSheet } from "./components/StudioSheet";
 import { Toast } from "./components/Toast";
@@ -29,6 +30,7 @@ export default function App() {
   const [localOnly, setLocalOnly] = useState(false);
   const [extra, setExtra] = useState<Issue[]>([]);
   const [viewerId, setViewerId] = useState<string | null>(null);
+  const [startSlide, setStartSlide] = useState(0);
   const [voting, setVoting] = useState(false);
   const [studioOpen, setStudioOpen] = useState(false);
   const [studioBusy, setStudioBusy] = useState(false);
@@ -123,7 +125,8 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewerId, viewerIssue, loadPolls]);
 
-  const openIssue = (issue: Issue) => {
+  const openIssue = (issue: Issue, slide = 0) => {
+    setStartSlide(slide);
     setViewerId(issue.id);
     history.replaceState(null, "", `#/i/${issue.id}`);
     if (!polls[issue.id]) void loadPolls([issue]);
@@ -284,18 +287,38 @@ export default function App() {
           <>
             {doc?.notice && <p className="notice" data-testid="notice">{doc.notice}</p>}
 
+            <section className="masthead" data-testid="masthead">
+              <div className="masthead-rule">
+                <span>DAILY INDEX</span>
+                <span>{issues.length} STORIES</span>
+              </div>
+              <h2 className="masthead-title">
+                오늘, 어디서
+                <br />
+                갈렸나<span className="masthead-dot">.</span>
+              </h2>
+              <p className="masthead-sub">
+                언론사 13곳의 실제 기사만 모아 카드뉴스 5장으로. 읽고, 고르고, 댓글로 붙습니다.
+              </p>
+            </section>
+
             <section className="hero-wrap">
               <div className="hero-label">
                 <span className="hero-label-dot" aria-hidden="true" />
-                오늘 가장 뜨거운 이슈
+                <span>오늘 가장 뜨거운 이슈</span>
+                <span className="hero-label-line" aria-hidden="true" />
               </div>
               <HeroCard issue={hero} poll={polls[hero.id] ?? null} onOpen={openIssue} />
             </section>
 
+            <CardPreview issue={hero} onOpen={(slide) => openIssue(hero, slide)} />
+
             <section className="feed">
-              <div className="feed-head">
-                <h2>오늘의 카드뉴스</h2>
-                <span>{feed.length}건 · 온도 높은 순</span>
+              <div className="section-head">
+                <h2>
+                  오늘의 카드뉴스 <em>{feed.length}</em>
+                </h2>
+                <span className="section-note">온도 높은 순</span>
               </div>
               <div className="grid">
                 {feed.map((issue, index) => (
@@ -311,19 +334,21 @@ export default function App() {
             </section>
 
             <section className="how">
-              <h2>이렇게 씁니다</h2>
+              <h2>
+                이렇게 <em>한다</em>
+              </h2>
               <ol>
                 <li>
-                  <b>1</b>
-                  <span>오늘 언론사 RSS 13곳에서 실제 기사를 긁어옵니다</span>
+                  <b>01</b>
+                  <span>언론사 RSS 13곳에서 오늘 기사를 긁어옵니다</span>
                 </li>
                 <li>
-                  <b>2</b>
-                  <span>AI가 표지 훅·팩트 3줄·배경·쟁점·A vs B로 카드 5장을 만듭니다</span>
+                  <b>02</b>
+                  <span>AI가 표지 훅·팩트 3줄·쟁점·A vs B로 카드 5장을 만듭니다</span>
                 </li>
                 <li>
-                  <b>3</b>
-                  <span>PNG로 저장해 인스타에 올리고, 아래에서 투표·토론으로 이어집니다</span>
+                  <b>03</b>
+                  <span>PNG로 저장해 인스타에 올리고, 여기서 투표·토론으로 이어집니다</span>
                 </li>
               </ol>
             </section>
@@ -341,10 +366,12 @@ export default function App() {
 
       {viewerIssue && (
         <CardNewsViewer
+          key={viewerIssue.id}
           issue={viewerIssue}
           poll={polls[viewerIssue.id] ?? emptyPoll(viewerIssue)}
           voting={voting}
           localOnly={localOnly}
+          startIndex={startSlide}
           onClose={closeViewer}
           onVote={(choice) => void onVote(viewerIssue, choice)}
           onComment={(side, text) => onComment(viewerIssue, side, text)}

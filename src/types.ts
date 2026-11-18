@@ -103,10 +103,11 @@ export interface PollsResponse {
   message?: string;
 }
 
+/** 카테고리 색은 검정 바탕에서 바로 읽히는 네온 톤으로 맞췄습니다. */
 export const CATEGORY_META: Record<Category, { label: string; short: string; color: string; soft: string }> = {
-  work: { label: "직장·커리어", short: "직장", color: "#1f7a5c", soft: "#e4f2ec" },
-  mz: { label: "MZ·트렌드", short: "MZ", color: "#7040b8", soft: "#efe7fb" },
-  money: { label: "소비·경제", short: "소비", color: "#a65a1c", soft: "#fbeedf" },
-  tech: { label: "테크·AI", short: "테크", color: "#3753c4", soft: "#e9ecfc" },
-  culture: { label: "문화·연예", short: "문화", color: "#b03a6a", soft: "#fbe7f0" },
+  work: { label: "직장·커리어", short: "직장", color: "#7EF0C0", soft: "rgba(126, 240, 192, 0.16)" },
+  mz: { label: "MZ·트렌드", short: "MZ", color: "#C9A7FF", soft: "rgba(201, 167, 255, 0.18)" },
+  money: { label: "소비·경제", short: "소비", color: "#FFC46B", soft: "rgba(255, 196, 107, 0.16)" },
+  tech: { label: "테크·AI", short: "테크", color: "#8FB6FF", soft: "rgba(143, 182, 255, 0.18)" },
+  culture: { label: "문화·연예", short: "문화", color: "#FF9EC4", soft: "rgba(255, 158, 196, 0.18)" },
 };

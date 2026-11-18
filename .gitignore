@@ -4,3 +4,5 @@ dist-static/
 .tmp/
 .DS_Store
 *.local
+__pycache__/
+*.pyc

@@ -33,6 +33,7 @@ import {
   type VercelRequest,
   type VercelResponse,
 } from "./_shared.js";
+import { buildPoll, isBlandPoll } from "./debate.js";
 
 export const config = { maxDuration: 60 };
 
@@ -50,6 +51,7 @@ const SYSTEM_PROMPT = `당신은 20~30대가 실제로 반응하는 뉴스를 �
 - 확인되지 않은 추측을 사실처럼 쓰지 마세요. 불확실하면 그 문장을 빼세요.
 - 한 카드에 문장은 1~2개. 구어체 존댓말("~했어요", "~인데요")로 짧게.
 - 투표는 이 내용을 읽은 사람이 바로 고를 수 있는 양자택일이어야 합니다. 정답이 없는 질문만 만드세요.
+- 투표 문항은 기사 속 갈등(누가 손해인지, 무엇이 부당한지, 어디까지 받아들일지)을 정면으로 묻습니다.
 
 카드 구성(인스타 5장):
 - hook: 카드 표지의 한 줄. 38자 이내. 숫자나 대비로 눈에 걸리게.
@@ -58,7 +60,10 @@ const SYSTEM_PROMPT = `당신은 20~30대가 실제로 반응하는 뉴스를 �
 - background: 배경 2문장, 110자 이내. 왜 갑자기 화제인지.
 - point: 핵심 쟁점 한 줄, 55자 이내.
 - sides: 갈리는 두 진영. labelA/labelB 10자 이내, a/b 각 55자 이내.
-- poll.question: 32자 이내 질문. poll.a / poll.b: 각 22자 이내 선택지.
+- poll: 이 기사에서만 통하는 A/B 양자택일. 20~30대 댓글창에서 편 갈릴 만큼 팽팽하게.
+  · question 32자 이내(기사 속 주제어를 넣은 도발적인 한 줄), a/b 각 22자 이내(한쪽으로 기운 단정형).
+  · 금지: "찬성/반대", "이해된다/아니다", "어떻게 보시나요", "영향 있나요", "이미 체감 중", "아직 남 일".
+  · 예: "소비자 기만, 즉시 불매" / "원가 상승 불가피, 기업 옹호".
 - temp: 지금 여론이 달아오른 정도 0~100 정수(사과·철회·논란·품절은 70 이상, 단순 발표는 30~50).
 - category: work | mz | money | tech | culture 중 하나.
 - tags: 검색 키워드 3개(# 없이).
@@ -97,10 +102,11 @@ function sentences(text: string, limit: number): string[] {
 function fallbackCard(input: { title: string; source: string; url: string; body: string; image: string }): IssueCard {
   const sentencesPool = sentences(input.body, 6);
   const facts = sentencesPool.slice(0, 3);
+  const title = input.title || clean(input.body, 80);
   return {
     id: shortId(input.url || input.title),
     category: "mz",
-    title: input.title || clean(input.body, 80),
+    title,
     source: input.source,
     url: input.url,
     publishedAt: Date.now(),
@@ -111,7 +117,7 @@ function fallbackCard(input: { title: string; source: string; url: string; body:
     background: sentencesPool.slice(3, 5).join(" "),
     point: "",
     sides: null,
-    poll: { question: "이 이슈, 내 일상에 영향 있나요?", a: "이미 체감 중", b: "아직 남 일" },
+    poll: buildPoll({ title, summary: input.body.slice(0, 300), body: input.body, category: "mz" }),
     temp: null,
     tags: [],
     ai: false,
@@ -150,9 +156,9 @@ function normalizeCard(raw: unknown, base: { title: string; source: string; url:
     point: clean(row.point, 80),
     sides: sideA && sideB ? { labelA, labelB, a: sideA, b: sideB } : null,
     poll:
-      pollA && pollB
-        ? { question: clean(pollRaw.question, 60) || "이 이슈, 어떻게 봐요?", a: pollA, b: pollB }
-        : { question: "이 이슈, 어떻게 봐요?", a: "이해된다", b: "아니다" },
+      pollA && pollB && !isBlandPoll({ question: clean(pollRaw.question, 60), a: pollA, b: pollB }, base.title)
+        ? { question: clean(pollRaw.question, 60) || buildPoll({ title: base.title, body: base.body }).question, a: pollA, b: pollB }
+        : buildPoll({ title: base.title || hook, summary: base.body.slice(0, 300), body: base.body }),
     temp: typeof row.temp === "undefined" ? null : clampInt(row.temp, 0, 100, 55),
     tags: cleanList(row.tags, 3, 14),
     ai: true,

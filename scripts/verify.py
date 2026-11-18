@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""이슈온도계 v4 검증 — 실제 뉴스 수집 → 인스타 카드뉴스 5장(PNG/ZIP/캡션) → 투표·토론을 실제 브라우저로 확인합니다.
+"""이슈온도계 v5 검증 — 실제 뉴스 수집 → 이슈별 A/B → 인스타 카드뉴스 5장(PNG/ZIP/캡션) → 투표·토론을 실제 브라우저로 확인합니다.
 
 시나리오
-  A. 모바일 390 — 피드 → 카드뉴스 5장 → PNG/ZIP 저장 → 캡션 복사 → 투표·토론 댓글·공감
+  A. 모바일 390 — 피드(카드마다 다른 A/B 노출) → 카드뉴스 5장 → PNG/ZIP 저장 → 캡션 복사 → 투표·토론 댓글·공감
   B. 두 번째 브라우저 — 같은 공용 저장소에서 투표·댓글이 함께 쌓이는지
   C. 뉴스로 만들기 — 기사 링크를 넣으면 본문을 읽어 카드가 생기는지(+ 한 줄 입력, 링크 거부)
-  D. AI 키 없음 — 실제 헤드라인만으로 카드 5장이 뜨고 "AI 없이" 표시가 정직한지
+  D. AI 키 없음 — 실제 헤드라인만으로 카드 5장이 뜨고 "AI 없이" 표시가 정직한지,
+     AI가 없어도 카드마다 A/B 문항이 다른지
   E. 정적 배포 — 서버가 없을 때 안내가 뜨고 /api 요청을 보내지 않는지
   F. 데스크톱 1280 — 2단(카드 | 토론) 레이아웃·가로 넘침
 
@@ -183,6 +184,42 @@ def png_size(path: Path) -> tuple[int, int]:
     return struct.unpack(">II", data[16:24])
 
 
+# 밋밋한 고정 문구 — 이게 보이면 실패로 봅니다(예전 버전이 쓰던 문장들)
+BLAND_POLL = re.compile(
+    r"(이 뉴스, 내 일상에|이 이슈, 어떻게 봐요|어떻게 보시나요|어떻게 생각하|찬성하시나요|반대하시나요|"
+    r"이미 체감 중|아직 남 일|받아들일 만한가|영향 있나요)"
+)
+
+
+def poll_problems(issues: list[dict]) -> list[str]:
+    """카드별 A/B가 서로 다르고, 그 기사에 붙은 문장인지 확인합니다."""
+    problems: list[str] = []
+    questions = [issue.get("poll", {}).get("question", "") for issue in issues]
+    pairs = [(issue.get("poll", {}).get("a", ""), issue.get("poll", {}).get("b", "")) for issue in issues]
+    if len(set(questions)) != len(questions):
+        problems.append(f"중복 질문: {questions}")
+    if len(set(pairs)) != len(pairs):
+        problems.append(f"중복 선택지: {pairs}")
+    for issue in issues:
+        poll = issue.get("poll") or {}
+        question = poll.get("question", "")
+        a, b = poll.get("a", ""), poll.get("b", "")
+        if not (6 <= len(question) <= 44):
+            problems.append(f"질문 길이: {question}")
+        if not (2 <= len(a) <= 30 and 2 <= len(b) <= 30):
+            problems.append(f"선택지 길이: {a}/{b}")
+        if a == b:
+            problems.append(f"같은 선택지: {a}")
+        if BLAND_POLL.search(question):
+            problems.append(f"고정 문구: {question}")
+        # 기사 제목의 낱말이 문항에 하나도 안 들어가면 '아무 기사에나 붙는 질문'입니다.
+        compact = issue.get("title", "").replace(" ", "")
+        words = [word for word in re.split(r"[^가-힣A-Za-z0-9]+", " ".join([question, a, b])) if len(word) >= 2]
+        if not any(word in compact for word in words):
+            problems.append(f"기사와 무관: {question} / {issue.get('title', '')[:30]}")
+    return problems
+
+
 def save_download(page, selector: str, target: Path) -> bool:
     try:
         with page.expect_download(timeout=30000) as info:
@@ -219,9 +256,22 @@ def scenario_mobile(base: str, browser):
     check("A: 히어로 한 줄 훅 표시", len(hook) >= 8, hook)
     check("A: 출처·시간 표시", bool(re.search(r"분 전|시간 전|방금", page.locator('[data-testid="hero-card"]').inner_text())))
 
+    # 목록에서도 이슈마다 다른 A/B가 보여야 합니다(예전에는 같은 문항이 반복됐음).
+    teasers = page.locator('[data-testid="feed-card"] .teaser-q')
+    teaser_texts = [teasers.nth(i).inner_text().strip() for i in range(teasers.count())]
+    check("A: 목록에서 A/B 문항이 바로 보임", len(teaser_texts) >= 3 and all(len(t) >= 8 for t in teaser_texts), str(teaser_texts)[:120])
+    check("A: 카드마다 투표 문항이 다름", len(set(teaser_texts)) == len(teaser_texts), str(teaser_texts)[:160])
+    opts = page.locator('[data-testid="feed-card"] .teaser-opt span')
+    check("A: 목록에 A/B 선택지 문구", opts.count() >= 6)
+
     strip = page.locator(".live-strip").inner_text()
     check("A: 수집 시각·건수·AI 상태 노출", "기준" in strip and "이슈" in strip and "AI" in strip, strip)
     check("A: 언론사 수집 현황 노출", "언론사" in strip, strip)
+
+    font = page.evaluate("getComputedStyle(document.querySelector('.hero-hook')).fontFamily")
+    size = page.evaluate("parseFloat(getComputedStyle(document.querySelector('.hero-hook')).fontSize)")
+    check("A: Pretendard/SUIT 고딕으로 바뀜", "Pretendard" in font or "SUIT" in font, font)
+    check("A: 임팩트 헤드라인(26px 이상)", size >= 26, str(size))
 
     body = page.inner_text("body")
     check("A: 언론사 이름 표시", any(name in body for name in ("연합뉴스", "블로터", "한국경제", "경향신문")))
@@ -271,6 +321,12 @@ def scenario_mobile(base: str, browser):
     check("A: ⑤ 한 줄 팩폭·질문", len(page.locator(".cn-question-hook").inner_text().strip()) >= 8)
     check("A: ⑤ 투표 선택지 A/B", page.locator('[data-testid="slide-5"] .cn-option').count() == 2, question_text[:60])
     check("A: ⑤ 토론 유도 문구", "댓글" in question_text)
+    check(
+        "A: ⑤ 투표 카드 제목 = 이 카드의 질문",
+        page.locator(".cn-question-hook").inner_text().strip()
+        == page.locator('[data-testid="poll-question"]').inner_text().strip(),
+        page.locator(".cn-question-hook").inner_text()[:40],
+    )
     page.screenshot(path=str(SHOTS / "07-mobile-question.png"))
 
     # PNG 저장 (현재 장 = 5장)
@@ -441,6 +497,8 @@ def scenario_briefing(base: str, browser, port: int):
     created = page.locator(".cn-cover .cn-hook").inner_text().strip()
     check("C: 기사 링크로 카드 생성", "주 4일제" in created, created)
     check("C: 만든 카드도 5장 구성", page.locator(".cn-seg").count() == 5)
+    created_poll = page.locator('[data-testid="poll-question"]').inner_text().strip()
+    check("C: 만든 카드도 기사 맞춤 A/B", not BLAND_POLL.search(created_poll), created_poll)
     page.screenshot(path=str(SHOTS / "12-mobile-created.png"))
     page.locator('[data-testid="close-viewer"]').click()
     settle(page, 500)
@@ -480,6 +538,20 @@ def scenario_ssrf(port: int):
 
 
 # ---------------------------------------------------------------- scenario D (키 없음)
+
+def poll_engine_checks(port: int) -> None:
+    """AI가 없을 때도 카드마다 다른 A/B가 나오는지 — 예전엔 5장이 모두 같은 문항이었습니다."""
+    status, payload = api_json(port, "/api/trending")
+    issues = payload.get("issues") or []
+    check("D: AI 없이도 카드 4건 이상", status == 200 and len(issues) >= 4, f"{status} {len(issues)}건")
+    problems = poll_problems(issues)
+    check("D: AI 없이도 카드마다 다른 A/B", not problems, " | ".join(problems[:3]))
+    check(
+        "D: 고정 문구가 남지 않음",
+        not any(BLAND_POLL.search((issue.get("poll") or {}).get("question", "")) for issue in issues),
+        str([issue.get("poll", {}).get("question") for issue in issues])[:160],
+    )
+
 
 def scenario_headline_only(port: int, browser):
     base = f"http://127.0.0.1:{port}/"
@@ -591,6 +663,13 @@ def api_checks(port: int):
     check("API: 지어낸 기사 없음(모두 테스트 피드 제목)", all("http://127.0.0.1" in issue["url"] for issue in issues))
     check("API: 본문에 HTML 태그가 남지 않음", all("<" not in fact for issue in issues for fact in issue.get("facts") or []))
 
+    problems = poll_problems(issues)
+    check("API: 카드마다 팽팽한 A/B (중복·고정 문구·기사 무관 없음)", not problems, " | ".join(problems[:3]))
+    check(
+        "API: 투표 문항에 기사 주제어가 들어감",
+        all(any(word in issue["title"].replace(" ", "") for word in re.split(r"[^가-힣A-Za-z0-9]+", issue["poll"]["question"]) if len(word) >= 2) for issue in issues),
+    )
+
     fid = issues[0]["id"]
     status, payload = api_json(port, f"/api/trending?issue={fid}")
     check("API: 카드 하나 다시 꺼내기(공유 링크)", status == 200 and payload.get("issue", {}).get("id") == fid)
@@ -640,7 +719,7 @@ def api_checks(port: int):
 
     state = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/__state", timeout=10))
     keys = list((state.get("redis") or {}).keys())
-    card_keys = [key for key in keys if key.startswith("issue-thermo:issue:v2:")]
+    card_keys = [key for key in keys if key.startswith("issue-thermo:issue:v3:")]
     check("API: 공유 카드를 카드별로 따로 보관(캐시가 바뀌어도 열림)", len(card_keys) >= 4, str(keys[:5]))
     check("API: 투표·댓글 집계 키 저장", any(key.startswith("issue-thermo:polls:") for key in keys), str(keys[:5]))
 
@@ -649,19 +728,22 @@ def api_checks(port: int):
 
 def main() -> int:
     SHOTS.mkdir(parents=True, exist_ok=True)
-    for old in SHOTS.glob("*.png"):
-        if re.match(r"^\d", old.name):
-            old.unlink()
+    # 이번 실행에서 다시 만들지 않은 예전 스크린샷은 마지막에 지웁니다.
+    # (중간에 브라우저가 죽어도 이미 있던 스크린샷을 잃지 않도록 먼저 지우지 않습니다)
+    started_at = time.time()
 
-    print("== 빌드 ==")
-    subprocess.run(["npm", "run", "build"], cwd=ROOT, env=ENV, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(
-        ["npx", "vite", "build", "--outDir", "dist-static"],
-        cwd=ROOT,
-        env={**ENV, "VITE_STATIC_ONLY": "1"},
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
+    if os.environ.get("VERIFY_SKIP_BUILD") == "1":
+        print("== 빌드 생략 (VERIFY_SKIP_BUILD=1: 이미 만든 dist 사용) ==")
+    else:
+        print("== 빌드 ==")
+        subprocess.run(["npm", "run", "build"], cwd=ROOT, env=ENV, check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(
+            ["npx", "vite", "build", "--outDir", "dist-static"],
+            cwd=ROOT,
+            env={**ENV, "VITE_STATIC_ONLY": "1"},
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
 
     port_a, port_d, port_e, port_s = 4191, 4192, 4193, 4194
     servers = []
@@ -695,6 +777,7 @@ def main() -> int:
             try:
                 print("== D: AI 키 없음 ==")
                 scenario_headline_only(port_d, browser)
+                poll_engine_checks(port_d)
                 print("== E: 정적 배포 ==")
                 scenario_static(port_e, browser)
             finally:
@@ -709,6 +792,10 @@ def main() -> int:
         for proc, log in servers:
             stop_server(proc)
             log.close()
+
+    for old in SHOTS.glob("*.png"):
+        if re.match(r"^\d", old.name) and old.stat().st_mtime < started_at - 1:
+            old.unlink()
 
     unique_errors = sorted({f"{tag} {text}" for tag, text in console_errors})
     check("콘솔 에러·경고 0", len(unique_errors) == 0, " | ".join(unique_errors[:4]))
