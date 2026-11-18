@@ -5,8 +5,8 @@
  * GET /api/trending?refresh=1  캐시를 무시하고 새로 긁어옵니다
  * GET /api/trending?issue=ID   공유 링크로 받은 카드 하나만 다시 꺼냅니다
  *
- * 흐름: 한국 언론사 RSS 7곳 → 오늘 기사 후보 → 본문 확인 → AI가 카드뉴스 4~5장으로 정리
- *       (한 줄 훅 · 팩트 2줄 · 양쪽 입장 · A/B 투표 질문 · 논란 온도)
+ * 흐름: 한국 언론사 RSS 13곳 → 오늘 기사 후보 → 본문 확인 → AI가 카드뉴스 5장으로 정리
+ *       (표지 훅 · 팩트 3줄 · 배경·쟁점 · A vs B · 한 줄 팩폭/투표 질문)
  *
  * AI 키가 없거나 실패하면 **실제 헤드라인 그대로**의 카드(제목·출처·시각·원문 링크)를 내려보냅니다.
  * 지어낸 뉴스는 어떤 경로에서도 만들지 않습니다.
@@ -15,11 +15,14 @@
 import {
   ENV,
   aiStatus,
+  asSentence,
   callModel,
   clean,
   cleanList,
+  cleanNewsText,
   clampInt,
   decodeEntities,
+  factScore,
   fetchArticle,
   kvGet,
   kvSet,
@@ -30,7 +33,7 @@ import {
   resolveRoute,
   setCors,
   shortId,
-  stripBoilerplate,
+  splitSentences,
   storeLabel,
   clientIp,
   type VercelRequest,
@@ -39,20 +42,30 @@ import {
 
 export const config = { maxDuration: 60 };
 
-const CACHE_KEY = "issue-thermo:trending:v1";
+const CACHE_KEY = "issue-thermo:trending:v2";
 /** 공유 링크로 받은 사람이 며칠 뒤에 열어도 카드가 남아 있도록, 카드 하나씩 따로 보관합니다. */
-const ISSUE_KEY_PREFIX = "issue-thermo:issue:v1:";
+const ISSUE_KEY_PREFIX = "issue-thermo:issue:v2:";
 const ISSUE_TTL_SECONDS = 60 * 60 * 24 * 7;
 const CACHE_TTL_SECONDS = 60 * 15;
 const CACHE_FRESH_MS = 12 * 60 * 1000;
-const FEED_TIMEOUT_MS = 9_000;
-const MAX_ITEMS_PER_FEED = 60;
+const FEED_TIMEOUT_MS = 8_000;
+const MAX_ITEMS_PER_FEED = 40;
+const MAX_AGE_HOURS = 26;
+const CANDIDATE_LIMIT = 16;
+const CARD_LIMIT = 6;
 
 export type Category = "work" | "mz" | "money" | "tech" | "culture";
 const CATEGORIES: Category[] = ["work", "mz", "money", "tech", "culture"];
 
 export interface IssuePoll {
   question: string;
+  a: string;
+  b: string;
+}
+
+export interface IssueSides {
+  labelA: string;
+  labelB: string;
   a: string;
   b: string;
 }
@@ -67,8 +80,13 @@ export interface Issue {
   image: string;
   hook: string;
   kicker: string;
+  /** 팩트 3줄 — 무슨 일인데 */
   facts: string[];
-  sides: { a: string; b: string } | null;
+  /** 왜 지금 떴나 · 배경 */
+  background: string;
+  /** 핵심 쟁점 한 줄 */
+  point: string;
+  sides: IssueSides | null;
   poll: IssuePoll;
   temp: number | null;
   tags: string[];
@@ -96,6 +114,7 @@ interface Feed {
 /**
  * 실제 한국 언론사 RSS. 제목·요약·발행시각·원문 링크·대표 이미지를 함께 주는 피드만 씁니다.
  * (Google 뉴스 RSS는 요약이 링크뿐이라 사실 확인 근거로 쓸 수 없어 넣지 않았습니다.)
+ * 한 곳이 막혀도 나머지로 계속 갑니다 — 어느 피드가 살아 있는지는 응답의 feeds 에 그대로 나갑니다.
  */
 const FEEDS: Feed[] = [
   { name: "연합뉴스 종합", slug: "yna-news", source: "연합뉴스", url: "https://www.yna.co.kr/rss/news.xml", hint: "mz" },
@@ -103,8 +122,14 @@ const FEEDS: Feed[] = [
   { name: "연합뉴스 산업", slug: "yna-industry", source: "연합뉴스", url: "https://www.yna.co.kr/rss/industry.xml", hint: "tech" },
   { name: "연합뉴스 문화", slug: "yna-culture", source: "연합뉴스", url: "https://www.yna.co.kr/rss/culture.xml", hint: "culture" },
   { name: "연합뉴스 정치", slug: "yna-politics", source: "연합뉴스", url: "https://www.yna.co.kr/rss/politics.xml", hint: "work" },
+  { name: "경향신문", slug: "khan", source: "경향신문", url: "https://www.khan.co.kr/rss/rssdata/total_news.xml", hint: "mz" },
+  { name: "동아일보", slug: "donga", source: "동아일보", url: "https://rss.donga.com/total.xml", hint: "mz" },
+  { name: "동아일보 경제", slug: "donga-economy", source: "동아일보", url: "https://rss.donga.com/economy.xml", hint: "money" },
+  { name: "오마이뉴스", slug: "ohmynews", source: "오마이뉴스", url: "https://rss.ohmynews.com/rss/ohmynews.xml", hint: "mz" },
+  { name: "SBS 뉴스", slug: "sbs", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=01", hint: "mz" },
+  { name: "SBS 경제", slug: "sbs-economy", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=02", hint: "money" },
   { name: "블로터", slug: "bloter", source: "블로터", url: "https://www.bloter.net/rss/allArticle.xml", hint: "tech" },
-  { name: "매일경제", slug: "mk", source: "매일경제", url: "https://www.mk.co.kr/rss/30000001/", hint: "money" },
+  { name: "전자신문", slug: "etnews", source: "전자신문", url: "https://rss.etnews.com/Section901.xml", hint: "tech" },
 ];
 
 /** 검증 하네스가 가짜 RSS를 띄울 때만 씁니다. 배포 환경에서는 비어 있어 실제 언론사 주소로 갑니다. */
@@ -126,6 +151,9 @@ interface Article {
   score: number;
 }
 
+const FEED_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
 /** RSS를 하나 읽어 기사 목록으로 바꿉니다. 실패하면 빈 배열(다른 피드는 계속 씁니다). */
 async function readFeed(feed: Feed): Promise<Article[]> {
   const controller = new AbortController();
@@ -134,8 +162,7 @@ async function readFeed(feed: Feed): Promise<Article[]> {
     const response = await fetch(feedUrl(feed), {
       signal: controller.signal,
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 IssueThermometer/1.0",
+        "User-Agent": FEED_USER_AGENT,
         Accept: "application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "ko-KR,ko;q=0.9",
       },
@@ -175,25 +202,25 @@ export function parseFeed(xml: string, feed: Feed): Article[] {
   const out: Article[] = [];
   for (const match of items) {
     const block = match[1];
-    const title = clean(tagText(block, "title"), 160);
+    const title = cleanNewsText(tagText(block, "title"), 160);
     const url = clean(tagText(block, "link"), 400) || clean(tagText(block, "guid"), 400);
     if (title.length < 8 || !/^https?:\/\//i.test(url)) continue;
 
-    const rawSummary = tagText(block, "description");
+    const rawSummary = tagText(block, "description") || tagText(block, "content:encoded");
     // 연합뉴스는 "(서울=연합뉴스) 홍길동 기자 =" 같은 머리말을 붙입니다.
-    const summary = clean(
-      stripBoilerplate(rawSummary)
-        .replace(/^\([^)]{1,20}\)\s*/, "")
-        .replace(/^\[[^\]]{1,20}\]\s*/, "")
-        .replace(/^[가-힣]{2,4}\s*기자\s*=\s*/, "")
+    const summary = cleanNewsText(
+      rawSummary
+        .replace(/^\([^)]{1,24}\)\s*/, "")
+        .replace(/^\[[^\]]{1,24}\]\s*/, "")
+        .replace(/^[가-힣]{2,4}\s*(?:기자|특파원)\s*=\s*/, "")
         .replace(/\s*\.\.\.$/, ""),
-      400,
+      600,
     );
     const image = clean(tagAttr(block, "media:content", "url") || tagAttr(block, "enclosure", "url"), 400);
     const publishedAt = parseDate(tagText(block, "pubDate") || tagText(block, "dc:date"));
 
     out.push({
-      title: stripBoilerplate(title),
+      title,
       summary,
       url,
       source: feed.source,
@@ -207,12 +234,12 @@ export function parseFeed(xml: string, feed: Feed): Article[] {
 }
 
 function parseDate(raw: string): number {
-  const value = clean(raw, 60);
+  const value = clean(raw, 80);
   if (!value) return 0;
   // "2026-11-16 18:15:09" 처럼 시간대가 없으면 한국 시간으로 읽습니다.
-  const naive = value.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/);
+  const naive = value.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
   if (naive) {
-    return Date.parse(`${naive[1]}-${naive[2]}-${naive[3]}T${naive[4]}:${naive[5]}:${naive[6]}+09:00`);
+    return Date.parse(`${naive[1]}-${naive[2]}-${naive[3]}T${naive[4]}:${naive[5]}:${naive[6] ?? "00"}+09:00`);
   }
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -221,32 +248,37 @@ function parseDate(raw: string): number {
 /* --------------------------------------------------------- candidate pick */
 
 const DROP_TITLE =
-  /(부고|인사\s*$|인사\s*=|포토\]|화보\]|\[영상\]|\[그래픽\]|\[속보\]|사설\]|칼럼\]|\[오늘의 날씨\]|운세|주요\s*일정|정부\s*일정|공지)/;
+  /(부고|인사\s*$|인사\s*=|포토\]|화보\]|\[영상\]|\[그래픽\]|사설\]|칼럼\]|\[오늘의 날씨\]|운세|주요\s*일정|정부\s*일정|공지|정치\s*일정|증시\s*전망|코스피\s*(?:마감|출발)|환율\s*(?:마감|출발)|오늘의\s*증시)/;
 
 /** 20~30대가 실제로 말하게 되는 키워드에 점수를 줍니다. */
 const HOT_KEYWORDS: { re: RegExp; weight: number; category?: Category }[] = [
-  { re: /(MZ|Z세대|2030|청년|사회초년생)/, weight: 30, category: "mz" },
-  { re: /(연봉|월급|성과급|수당|최저임금|주\s*4일|재택|야근|회식|채용|공채|면접|퇴사|이직|번아웃|갑질)/, weight: 28, category: "work" },
-  { re: /(물가|장바구니|치킨|커피|배달|구독|요금|인상|환율|부동산|전세|월세|대출|세금|지원금|소비|가격)/, weight: 26, category: "money" },
-  { re: /(AI|인공지능|챗GPT|반도체|플랫폼|앱|서비스|개인정보|해킹|유출|알고리즘)/, weight: 24, category: "tech" },
-  { re: /(드라마|예능|웹툰|아이돌|팬덤|티켓팅|공연|넷플릭스|유튜브|쇼츠|밈|시즌)/, weight: 22, category: "culture" },
-  { re: /(논란|의혹|사과|파문|반발|비판|고소|소송|철회|중단|1위|신기록|돌파)/, weight: 18 },
+  { re: /(MZ|Z세대|2030|청년|사회초년생|20대|30대)/, weight: 30, category: "mz" },
+  { re: /(연봉|월급|성과급|수당|최저임금|주\s*4일|재택|야근|회식|채용|공채|면접|퇴사|이직|번아웃|갑질|노조|파업)/, weight: 28, category: "work" },
+  { re: /(물가|장바구니|치킨|커피|배달|구독|요금|인상|환율|부동산|전세|월세|대출|세금|지원금|소비|가격|금리)/, weight: 26, category: "money" },
+  { re: /(AI|인공지능|챗GPT|반도체|플랫폼|앱|서비스|개인정보|해킹|유출|알고리즘|로봇|전기차)/, weight: 24, category: "tech" },
+  { re: /(드라마|예능|웹툰|아이돌|팬덤|티켓팅|공연|넷플릭스|유튜브|쇼츠|밈|시즌|영화)/, weight: 22, category: "culture" },
+  { re: /(논란|의혹|사과|파문|반발|비판|고소|소송|철회|중단|1위|신기록|돌파|최저|최고)/, weight: 18 },
 ];
 
 function scoreArticle(item: Article, now: number): number {
-  const ageHours = item.publishedAt > 0 ? (now - item.publishedAt) / 3_600_000 : 48;
-  if (ageHours > 30) return -1;
-  let score = Math.max(0, 40 - ageHours * 1.6);
-  if (item.summary.length > 60) score += 12;
-  if (item.image) score += 6;
+  const ageHours = item.publishedAt > 0 ? (now - item.publishedAt) / 3_600_000 : 40;
+  if (ageHours > MAX_AGE_HOURS) return -1;
+  let score = Math.max(0, 44 - ageHours * 1.7);
+  if (item.summary.length > 70) score += 12;
+  else if (item.summary.length > 30) score += 6;
+  if (item.image) score += 5;
   for (const rule of HOT_KEYWORDS) if (rule.re.test(item.title) || rule.re.test(item.summary)) score += rule.weight;
-  if (DROP_TITLE.test(item.title)) score -= 80;
-  if (item.title.length > 70) score -= 6;
+  if (DROP_TITLE.test(item.title)) score -= 90;
+  if (item.title.length > 78) score -= 8;
+  if (/^\[(속보|1보|2보)\]/.test(item.title)) score -= 4;
   return score;
 }
 
 function normalizeTitle(title: string): string {
-  return title.replace(/[^가-힣a-zA-Z0-9]/g, "").slice(0, 40);
+  return title
+    .replace(/^\[[^\]]{1,10}\]\s*/, "")
+    .replace(/[^가-힣a-zA-Z0-9]/g, "")
+    .slice(0, 44);
 }
 
 function pickCandidates(items: Article[], limit: number): Article[] {
@@ -259,11 +291,15 @@ function pickCandidates(items: Article[], limit: number): Article[] {
     if (seenUrl.has(item.url)) continue;
     const key = normalizeTitle(item.title);
     if (key.length < 6 || seenTitle.has(key)) continue;
+    // 같은 사안을 여러 곳이 받아쓴 기사(제목 앞부분이 같음)는 한 번만 씁니다.
+    const prefix = key.slice(0, 18);
+    if (prefix.length >= 12 && seenTitle.has(`p:${prefix}`)) continue;
     const score = scoreArticle(item, now);
     if (score < 0) continue;
     const categoryRule = HOT_KEYWORDS.find((rule) => rule.category && rule.re.test(item.title));
     seenUrl.add(item.url);
     seenTitle.add(key);
+    if (prefix.length >= 12) seenTitle.add(`p:${prefix}`);
     scored.push({ ...item, hint: categoryRule?.category ?? item.hint, score });
   }
 
@@ -281,7 +317,7 @@ function pickCandidates(items: Article[], limit: number): Article[] {
   );
   const picked: Article[] = [];
   let round = 0;
-  while (picked.length < limit && round < 12) {
+  while (picked.length < limit && round < 14) {
     let added = false;
     for (const category of order) {
       const item = byCategory.get(category)?.[round];
@@ -294,51 +330,74 @@ function pickCandidates(items: Article[], limit: number): Article[] {
     if (!added) break;
     round += 1;
   }
+  // 카테고리 순환으로도 자리가 남으면 점수 순으로 채웁니다.
+  for (const item of scored) {
+    if (picked.length >= limit) break;
+    if (!picked.includes(item)) picked.push(item);
+  }
   return picked;
 }
 
-/** 후보 상위 기사의 본문을 확인해 AI에 사실 근거를 넣어 줍니다(실패해도 요약으로 진행). */
+const BODY_CONCURRENCY = 6;
+const BODY_BUDGET_MS = 12_000;
+
+/**
+ * 후보 기사의 본문을 확인해 AI에 사실 근거를 넣어 줍니다.
+ * 요약이 짧은 기사만 골라 동시 6건씩 읽고, 전체 12초를 넘으면 남은 기사는 요약으로 진행합니다
+ * (서버리스 함수 제한 시간 안에서 AI 호출 몫을 남겨 두기 위한 장치).
+ */
 async function enrichWithBody(items: Article[]): Promise<Article[]> {
-  const targets = items.slice(0, 6).filter((item) => item.summary.length < 220);
-  await Promise.all(
-    targets.map(async (item) => {
-      const outcome = await fetchArticle(item.url, 8_000);
-      if (outcome.ok && outcome.article.body.length > 120) {
-        item.body = outcome.article.body.slice(0, 1_400);
+  const targets = items.slice(0, 12).filter((item) => item.summary.length < 260);
+  const deadline = Date.now() + BODY_BUDGET_MS;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < targets.length && Date.now() < deadline) {
+      const item = targets[cursor];
+      cursor += 1;
+      const outcome = await fetchArticle(item.url, 6_000);
+      if (outcome.ok) {
+        const body = outcome.article.body;
+        if (body.length > 140) item.body = body.slice(0, 1_600);
+        if (!item.summary && outcome.article.description) item.summary = cleanNewsText(outcome.article.description, 600);
+        if (!item.image && outcome.article.image) item.image = outcome.article.image;
       }
-    }),
-  );
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(BODY_CONCURRENCY, targets.length) }, worker));
   return items;
 }
 
 /* ------------------------------------------------------------------- AI */
 
-const SYSTEM_PROMPT = `당신은 20~30대가 실제로 반응하는 뉴스를 골라 카드뉴스로 바꾸는 한국 뉴스레터 에디터입니다.
+const SYSTEM_PROMPT = `당신은 20~30대가 실제로 반응하는 뉴스를 골라 인스타그램 카드뉴스로 바꾸는 한국 뉴스레터 에디터입니다.
 독자는 퇴근길에 폰으로 30초 동안 훑습니다. 길게 쓰면 읽지 않습니다.
 
 절대 규칙:
 - 주어진 후보 기사에 적힌 사실만 씁니다. 없는 수치·기관명·인물명·회사명·날짜를 만들어내지 마세요.
 - 확인되지 않은 추측을 사실처럼 쓰지 마세요. 불확실하면 그 문장을 빼세요.
 - 실존 인물의 실명을 새로 만들지 마세요. 기사에 있는 이름만 그대로 씁니다.
+- 숫자는 기사에 적힌 그대로 씁니다(반올림·변형 금지). 숫자가 없으면 억지로 만들지 마세요.
 - 한 카드에 문장은 1~2개. 줄글 금지. 구어체 존댓말("~했어요", "~인데요")로 짧게.
 - 투표는 그 이슈를 읽은 사람이 바로 고를 수 있는 양자택일이어야 합니다. 정답이 없는 질문만 만드세요.
 
-카드 구성(각 이슈):
-- hook: 카드 표지의 한 줄. 40자 이내. 숫자나 대비로 눈에 걸리게.
-- kicker: 훅 아래 한 줄 맥락. 45자 이내.
-- facts: "무슨 일인데" 카드에 넣을 팩트 2개. 각 70자 이내.
-- sides: "어디서 갈리나" 카드의 양쪽 입장. a는 이해하는 쪽, b는 비판하는 쪽. 각 60자 이내.
-- poll.question: 30자 이내 질문. poll.a / poll.b: 각 24자 이내 선택지.
-- temp: 지금 여론이 달아오른 정도 0~100 정수(사과·철회·논란·품절은 70 이상, 단순 발표는 30~50).
-- category: work(직장·커리어) | mz(MZ·트렌드) | money(소비·경제) | tech(테크·AI) | culture(문화·연예) 중 하나.
-- tags: 검색 키워드 2~3개.
+카드 구성(각 이슈, 인스타 5장):
+1) hook: 표지 한 줄. 38자 이내. 숫자나 대비로 눈에 걸리게. 낚시성 왜곡 금지.
+2) kicker: 훅 아래 한 줄 맥락. 42자 이내.
+3) facts: "무슨 일인데" 카드의 팩트 **정확히 3개**. 각 65자 이내. 서로 다른 내용이어야 하고, 가능하면 숫자·주체·행동이 들어가게.
+4) background: "왜 지금 뜨나" 카드의 배경 2문장, 110자 이내. 앞서 무슨 일이 있었는지·왜 갑자기 화제인지.
+5) point: "핵심 쟁점" 한 줄. 55자 이내. 무엇을 두고 갈리는지 한 문장으로.
+6) sides: 갈리는 두 진영. labelA/labelB는 각 10자 이내(예: "찬성", "회사 쪽"), a/b는 각 55자 이내 주장.
+7) poll.question: 32자 이내 질문. poll.a / poll.b: 각 22자 이내 선택지.
+8) temp: 지금 여론이 달아오른 정도 0~100 정수(사과·철회·논란·품절은 70 이상, 단순 발표는 30~50).
+9) category: work(직장·커리어) | mz(MZ·트렌드) | money(소비·경제) | tech(테크·AI) | culture(문화·연예) 중 하나.
+10) tags: 검색 키워드 3개(각 12자 이내, # 없이).
 
 출력은 아래 스키마의 JSON 객체 하나뿐입니다. 코드블록·설명을 붙이지 마세요.
-{"issues":[{"pick":1,"category":"work","hook":"...","kicker":"...","facts":["...","..."],"sides":{"a":"...","b":"..."},"poll":{"question":"...","a":"...","b":"..."},"temp":68,"tags":["...","..."]}]}`;
+{"issues":[{"pick":1,"category":"work","hook":"...","kicker":"...","facts":["...","...","..."],"background":"...","point":"...","sides":{"labelA":"...","labelB":"...","a":"...","b":"..."},"poll":{"question":"...","a":"...","b":"..."},"temp":68,"tags":["...","...","..."]}]}`;
 
 function buildPrompt(items: Article[]): string {
   const lines = items.map((item, index) => {
-    const excerpt = (item.body || item.summary || "").slice(0, 700);
+    const excerpt = cleanNewsText(item.body || item.summary || "", 900);
     const at = item.publishedAt ? new Date(item.publishedAt).toISOString() : "";
     return [
       `[${index + 1}] ${item.title}`,
@@ -347,16 +406,79 @@ function buildPrompt(items: Article[]): string {
     ].join("\n");
   });
   return [
-    "아래는 오늘 한국 언론사 RSS에서 모은 후보 기사입니다. 이 중 20~30대가 실제로 말하게 될 이슈 4~5개를 골라 카드뉴스로 만드세요.",
+    "아래는 오늘 한국 언론사 RSS에서 모은 후보 기사입니다. 이 중 20~30대가 실제로 말하게 될 이슈 5~6개를 골라 카드뉴스로 만드세요.",
     "카테고리가 겹치지 않게 골라 주세요(가능하면 work·mz·money·tech·culture를 하나씩).",
     "pick에는 고른 후보 번호를 정확히 적으세요. 없는 번호는 쓰지 마세요.",
+    "내용이 2문장도 안 되는 후보는 고르지 마세요. 팩트 3개를 채울 수 있는 기사만 고르세요.",
     "",
     ...lines,
     "",
-    "각 이슈의 facts는 위 '내용'에 실제로 적힌 사실만으로 쓰세요. 내용이 부족한 후보는 고르지 마세요.",
+    "각 이슈의 facts·background는 위 '내용'에 실제로 적힌 사실만으로 쓰세요.",
   ].join("\n");
 }
 
+/** 형태만 조금 다른 같은 문장(“…반발하고 있어요” vs “…반발하고 있다”)을 같은 팩트로 봅니다. */
+function similarFact(a: string, b: string): boolean {
+  const norm = (value: string) => value.replace(/[^가-힣a-zA-Z0-9]/g, "").replace(/(어요|습니다|한다|있다|이다|된다)$/g, "");
+  const x = norm(a);
+  const y = norm(b);
+  if (x.length < 8 || y.length < 8) return false;
+  if (x.includes(y) || y.includes(x)) return true;
+  if (x.slice(0, 22) === y.slice(0, 22)) return true;
+  const bigrams = (value: string) => {
+    const set = new Set<string>();
+    for (let i = 0; i < value.length - 1; i += 1) set.add(value.slice(i, i + 2));
+    return set;
+  };
+  const A = bigrams(x);
+  const B = bigrams(y);
+  if (A.size === 0 || B.size === 0) return false;
+  let shared = 0;
+  for (const gram of A) if (B.has(gram)) shared += 1;
+  return shared / Math.min(A.size, B.size) > 0.72;
+}
+
+/** 팩트 3줄을 어떤 경우에도 채웁니다 — AI가 2개만 줬거나 요약이 짧아도 빈칸을 남기지 않습니다. */
+function fillFacts(facts: string[], item: Article): string[] {
+  const picked: string[] = [];
+  const push = (value: string) => {
+    const text = asSentence(value, 95);
+    if (!text || text.length < 12) return;
+    if (picked.some((existing) => similarFact(existing, text))) return;
+    picked.push(text);
+  };
+  facts.forEach(push);
+  const pool = [...splitSentences(item.summary, 4), ...splitSentences(item.body ?? "", 6)];
+  const ranked = pool
+    .map((sentence, order) => ({ sentence, order, score: factScore(sentence) }))
+    .sort((a, b) => b.score - a.score);
+  const chosen: { sentence: string; order: number }[] = [];
+  const already = (sentence: string) =>
+    picked.some((existing) => similarFact(existing, sentence)) || chosen.some((item) => similarFact(item.sentence, sentence));
+  for (const entry of ranked) {
+    if (picked.length + chosen.length >= 3) break;
+    if (already(entry.sentence)) continue;
+    chosen.push(entry);
+  }
+  // 점수로 고르되, 카드에는 기사 순서대로 읽히도록 정렬합니다.
+  chosen.sort((a, b) => a.order - b.order).forEach((entry) => push(entry.sentence));
+  if (picked.length < 3 && item.summary) push(item.summary);
+  return picked.slice(0, 3);
+}
+
+function fallbackBackground(item: Article, facts: string[]): string {
+  const pool = [...splitSentences(item.summary, 5), ...splitSentences(item.body ?? "", 7)];
+  const rest: string[] = [];
+  for (const sentence of pool) {
+    if (rest.length >= 2) break;
+    if (facts.some((fact) => similarFact(fact, sentence))) continue;
+    if (rest.some((kept) => similarFact(kept, sentence))) continue;
+    if (sentence.length < 30) continue;
+    rest.push(sentence);
+  }
+  if (rest.length > 0) return rest.join(" ");
+  return `${item.source}가 오늘 보도한 기사예요. 전체 내용은 원문에서 확인할 수 있어요.`;
+}
 
 function normalizeCards(raw: unknown, items: Article[]): Issue[] {
   const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
@@ -364,7 +486,7 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
   const used = new Set<number>();
   const issues: Issue[] = [];
 
-  for (const entry of list.slice(0, 6)) {
+  for (const entry of list.slice(0, CARD_LIMIT + 2)) {
     if (!entry || typeof entry !== "object") continue;
     const card = entry as Record<string, unknown>;
     const pick = clampInt(card.pick, 1, items.length, 0);
@@ -372,17 +494,21 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
     const item = items[pick - 1];
     if (!item) continue;
 
-    const hook = clean(card.hook, 80);
-    const facts = cleanList(card.facts, 2, 100);
-    if (hook.length < 6 || facts.length < 1) continue;
+    const hook = cleanNewsText(card.hook, 80);
+    const facts = fillFacts(cleanList(card.facts, 4, 110), item);
+    if (hook.length < 6 || facts.length < 2) continue;
 
     const categoryRaw = clean(card.category, 12) as Category;
     const sidesRaw = card.sides && typeof card.sides === "object" ? (card.sides as Record<string, unknown>) : {};
-    const sideA = clean(sidesRaw.a, 80);
-    const sideB = clean(sidesRaw.b, 80);
+    const sideA = cleanNewsText(sidesRaw.a, 90);
+    const sideB = cleanNewsText(sidesRaw.b, 90);
+    const labelA = cleanNewsText(sidesRaw.labelA, 14) || "이해하는 쪽";
+    const labelB = cleanNewsText(sidesRaw.labelB, 14) || "비판하는 쪽";
     const pollRaw = card.poll && typeof card.poll === "object" ? (card.poll as Record<string, unknown>) : {};
-    const pollA = clean(pollRaw.a, 40);
-    const pollB = clean(pollRaw.b, 40);
+    const pollA = cleanNewsText(pollRaw.a, 34);
+    const pollB = cleanNewsText(pollRaw.b, 34);
+    const point = cleanNewsText(card.point, 80) || cleanNewsText(pollRaw.question, 60);
+    const background = cleanNewsText(card.background, 180) || fallbackBackground(item, facts);
 
     used.add(pick);
     issues.push({
@@ -394,15 +520,17 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
       publishedAt: item.publishedAt || Date.now(),
       image: item.image,
       hook,
-      kicker: clean(card.kicker, 60) || clean(item.summary, 60),
-      facts: facts.length >= 2 ? facts : [facts[0], clean(item.summary, 100)].filter(Boolean),
-      sides: sideA && sideB ? { a: sideA, b: sideB } : null,
+      kicker: cleanNewsText(card.kicker, 70) || cleanNewsText(item.title, 70),
+      facts,
+      background,
+      point: point || "지금 이 이슈, 어디까지 받아들일 수 있을까요?",
+      sides: sideA && sideB ? { labelA, labelB, a: sideA.replace(/[.]$/, ""), b: sideB.replace(/[.]$/, "") } : null,
       poll:
         pollA && pollB
-          ? { question: clean(pollRaw.question, 60) || "이 이슈, 어떻게 봐요?", a: pollA, b: pollB }
+          ? { question: cleanNewsText(pollRaw.question, 60) || "이 이슈, 어떻게 봐요?", a: pollA, b: pollB }
           : { question: "이 뉴스, 내 일상에 영향 있나요?", a: "이미 체감 중", b: "아직 남 일" },
       temp: typeof card.temp === "undefined" ? null : clampInt(card.temp, 0, 100, 55),
-      tags: cleanList(card.tags, 3, 14),
+      tags: cleanList(card.tags, 3, 16).map((tag) => tag.replace(/^#/, "")),
       ai: true,
     });
   }
@@ -411,23 +539,28 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
 
 /** AI가 없거나 실패했을 때 — 실제 기사 그대로의 최소 카드. 없는 내용은 채우지 않습니다. */
 function headlineCards(items: Article[]): Issue[] {
-  return items.slice(0, 5).map((item) => ({
-    id: shortId(item.url),
-    category: item.hint,
-    title: item.title,
-    source: item.source,
-    url: item.url,
-    publishedAt: item.publishedAt || Date.now(),
-    image: item.image,
-    hook: item.title,
-    kicker: `${item.source} · 헤드라인`,
-    facts: [item.summary || item.title].filter(Boolean),
-    sides: null,
-    poll: { question: "이 뉴스, 내 일상에 영향 있나요?", a: "이미 체감 중", b: "아직 남 일" },
-    temp: null,
-    tags: [],
-    ai: false,
-  }));
+  return items.slice(0, 5).map((item) => {
+    const facts = fillFacts([], item);
+    return {
+      id: shortId(item.url),
+      category: item.hint,
+      title: item.title,
+      source: item.source,
+      url: item.url,
+      publishedAt: item.publishedAt || Date.now(),
+      image: item.image,
+      hook: cleanNewsText(item.title, 70),
+      kicker: `${item.source} · 헤드라인`,
+      facts: facts.length > 0 ? facts : [asSentence(item.title, 95)],
+      background: fallbackBackground(item, facts),
+      point: "",
+      sides: null,
+      poll: { question: "이 뉴스, 내 일상에 영향 있나요?", a: "이미 체감 중", b: "아직 남 일" },
+      temp: null,
+      tags: [],
+      ai: false,
+    };
+  });
 }
 
 /* ------------------------------------------------------------ collection */
@@ -444,7 +577,7 @@ async function collect(): Promise<TrendingDoc> {
     return { generatedAt: Date.now(), ai: null, issues: [], feeds, notice: "언론사 RSS에 연결하지 못했습니다." };
   }
 
-  const candidates = await enrichWithBody(pickCandidates(all, 10));
+  const candidates = await enrichWithBody(pickCandidates(all, CANDIDATE_LIMIT));
   const aiInfo = aiStatus();
   const route = resolveRoute("");
 
@@ -456,9 +589,9 @@ async function collect(): Promise<TrendingDoc> {
     const outcome = await callModel(route, {
       system: SYSTEM_PROMPT,
       prompt: buildPrompt(candidates),
-      temperature: 0.6,
-      maxTokens: 2_600,
-      timeoutMs: 40_000,
+      temperature: 0.55,
+      maxTokens: 3_200,
+      timeoutMs: 35_000,
     });
     if (outcome.ok) {
       const parsed = parseJsonObject(outcome.content);
@@ -475,7 +608,7 @@ async function collect(): Promise<TrendingDoc> {
   if (issues.length === 0) issues = headlineCards(candidates);
 
   const noticeParts: string[] = [];
-  if (reachable < FEEDS.length) noticeParts.push(`언론사 ${FEEDS.length}곳 중 ${reachable}곳에서만 받았습니다`);
+  if (reachable < FEEDS.length) noticeParts.push(`언론사 ${FEEDS.length}곳 중 ${reachable}곳에서 받았습니다`);
   if (aiMessage) noticeParts.push(aiMessage);
 
   return {

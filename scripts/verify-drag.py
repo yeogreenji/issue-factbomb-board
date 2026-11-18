@@ -3,10 +3,11 @@
 """카드뉴스 드래그 스와이프 검증 — 손끝·마우스를 따라 '실시간'으로 밀리는지 확인합니다.
 
   G1. 마우스로 끄는 동안 카드가 손을 실시간으로 따라오는가(중간 프레임 translateX)
-  G2. 마우스 드래그로 1/4 → 2/4 → 3/4 이동, 오른쪽으로 되돌리기
-  G3. 터치 스와이프(CDP Input.dispatchTouchEvent)로 1/4 → 2/4 → 3/4
+  G2. 마우스 드래그로 1/5 → 2/5 → 3/5 이동, 오른쪽으로 되돌리기
+  G3. 터치 스와이프(CDP Input.dispatchTouchEvent)로 1/5 → 4/5
   G4. 살짝만 끌면(임계값 미만) 제자리로 돌아오는가
   G5. < / > 버튼과 진행 막대·점 클릭이 여전히 부드럽게 동작하는가
+  G7. 카드 안 링크 위에서 끌어도 넘어가고, 그 클릭(새 탭)은 취소되는가
   G6. 모바일 390 가로 넘침 0, 콘솔 에러 0
 
 실행: node 22 + playwright. `python3 scripts/verify-drag.py`
@@ -95,8 +96,8 @@ def attach(page, tag: str):
 
 
 def translate_x(page) -> float:
-    """`.slides` 줄의 현재 translateX(px)."""
-    value = page.evaluate("getComputedStyle(document.querySelector('.slides')).transform")
+    """`.cn-track` 줄의 현재 translateX(px)."""
+    value = page.evaluate("getComputedStyle(document.querySelector('.cn-track')).transform")
     matrix = re.match(r"matrix\(([^)]+)\)", value)
     if matrix:
         return float(matrix.group(1).split(",")[4])
@@ -107,7 +108,7 @@ def translate_x(page) -> float:
 
 
 def counter(page) -> str:
-    return page.locator(".viewer-count").inner_text().strip()
+    return page.locator(".cn-count").inner_text().strip()
 
 
 def no_overflow(page) -> bool:
@@ -164,9 +165,9 @@ def scenario_mouse(base: str, browser) -> None:
     right = box["x"] + width * 0.82
     left = box["x"] + width * 0.22
 
-    check("G: 시작은 1/4", counter(page) == "1 / 4", counter(page))
+    check("G: 시작은 1/5", counter(page) == "1 / 5", counter(page))
 
-    mid: dict[str, float] = {}
+    mid: dict[str, float | str] = {}
 
     def hold(x):
         mid["tx"] = translate_x(page)
@@ -176,55 +177,56 @@ def scenario_mouse(base: str, browser) -> None:
 
     # --- 오른쪽 → 왼쪽으로 끌기: 손을 떼기 전에 이미 따라와 있어야 한다
     drag_mouse(page, (right, y), (left, y), hold_check=hold)
-    check("G1: 끄는 동안 카드가 실시간으로 따라옴(중간 translateX)", mid.get("tx", 0) < -40, f"tx={mid.get('tx')}")
-    check("G1: 끄는 동안 진행 표시는 아직 1/4(점프 아님)", mid.get("counter") == "1 / 4", str(mid.get("counter")))
-    check("G2: 손을 떼면 2/4로 스냅", counter(page) == "2 / 4", counter(page))
-    check("G2: 2/4에서 translateX가 카드 한 장 폭", abs(translate_x(page) + width) < 2, f"tx={translate_x(page)} width={width}")
+    check("G1: 끄는 동안 카드가 실시간으로 따라옴(중간 translateX)", float(mid.get("tx", 0)) < -40, f"tx={mid.get('tx')}")
+    check("G1: 끄는 동안 진행 표시는 아직 1/5(점프 아님)", mid.get("counter") == "1 / 5", str(mid.get("counter")))
+    check("G2: 손을 떼면 2/5로 스냅", counter(page) == "2 / 5", counter(page))
+    check("G2: 2/5에서 translateX가 카드 한 장 폭", abs(translate_x(page) + width) < 2, f"tx={translate_x(page)} width={width}")
 
-    # --- 한 번 더: 3/4
+    # --- 한 번 더: 3/5
     drag_mouse(page, (right, y), (left, y))
-    check("G2: 마우스 드래그 2/4 → 3/4", counter(page) == "3 / 4", counter(page))
+    check("G2: 마우스 드래그 2/5 → 3/5", counter(page) == "3 / 5", counter(page))
 
     # --- 오른쪽으로 되돌리기
     drag_mouse(page, (left, y), (right, y))
-    check("G2: 오른쪽으로 밀면 3/4 → 2/4", counter(page) == "2 / 4", counter(page))
+    check("G2: 오른쪽으로 밀면 3/5 → 2/5", counter(page) == "2 / 5", counter(page))
 
     # --- 살짝만(임계값 미만) 끌면 제자리
     drag_mouse(page, (box["x"] + width * 0.6, y), (box["x"] + width * 0.52, y), steps=6)
-    check("G4: 살짝 끌면 제자리(2/4 유지)", counter(page) == "2 / 4", counter(page))
+    check("G4: 살짝 끌면 제자리(2/5 유지)", counter(page) == "2 / 5", counter(page))
     check("G4: 제자리로 돌아온 translateX", abs(translate_x(page) + width) < 2, f"tx={translate_x(page)}")
 
     # --- 첫 장에서 오른쪽으로 밀면 저항만 있고 넘어가지 않음
     page.locator('[data-testid="progress-1"]').click()
     page.wait_for_timeout(560)
-    check("G5: 진행 막대 1번 클릭 → 1/4", counter(page) == "1 / 4", counter(page))
+    check("G5: 진행 막대 1번 클릭 → 1/5", counter(page) == "1 / 5", counter(page))
     drag_mouse(page, (left, y), (right, y))
-    check("G4: 첫 장에서 오른쪽으로 밀어도 그대로", counter(page) == "1 / 4", counter(page))
+    check("G4: 첫 장에서 오른쪽으로 밀어도 그대로", counter(page) == "1 / 5", counter(page))
 
     # --- 버튼·점 클릭도 여전히 동작
     page.locator('[data-testid="next"]').click()
     page.wait_for_timeout(520)
-    check("G5: > 버튼 → 2/4", counter(page) == "2 / 4", counter(page))
+    check("G5: > 버튼 → 2/5", counter(page) == "2 / 5", counter(page))
     page.locator('[data-testid="prev"]').click()
     page.wait_for_timeout(520)
-    check("G5: < 버튼 → 1/4", counter(page) == "1 / 4", counter(page))
-    page.locator('[data-testid="progress-4"]').click()
+    check("G5: < 버튼 → 1/5", counter(page) == "1 / 5", counter(page))
+    page.locator('[data-testid="progress-5"]').click()
     page.wait_for_timeout(560)
-    check("G5: 진행 막대 4번 클릭 → 4/4", counter(page) == "4 / 4", counter(page))
-    page.locator(".viewer-nav .dot-item").nth(1).click()
+    check("G5: 진행 막대 5번 클릭 → 5/5", counter(page) == "5 / 5", counter(page))
+    page.locator(".cn-dot").nth(1).click()
     page.wait_for_timeout(560)
-    check("G5: 아래 점 클릭 → 2/4", counter(page) == "2 / 4", counter(page))
+    check("G5: 아래 점 클릭 → 2/5", counter(page) == "2 / 5", counter(page))
 
-    # --- 투표 버튼 위에서 끌기 시작해도 카드가 넘어가고, 그 클릭은 취소됨
-    page.locator('[data-testid="progress-4"]').click()
+    # --- 카드 안 링크 위에서 끌기 시작해도 카드가 넘어가고, 링크 클릭(새 탭)은 취소됨
+    page.locator('[data-testid="progress-2"]').click()
     page.wait_for_timeout(600)
-    vote = page.locator('[data-testid="vote-a"]').bounding_box()
-    vx, vy = vote["x"] + vote["width"] / 2, vote["y"] + vote["height"] / 2
-    drag_mouse(page, (vx, vy), (vx + 190, vy))
-    check("G7: 투표 버튼 위에서 끌어도 4/4 → 3/4", counter(page) == "3 / 4", counter(page))
-    check("G7: 끌었을 뿐이면 투표는 안 됨", page.locator('[data-testid="vote-a"]').get_attribute("aria-pressed") != "true")
-    page.locator('[data-testid="progress-4"]').click()
-    page.wait_for_timeout(600)
+    link = page.locator('[data-testid="slide-2"] .cn-link').bounding_box()
+    lx, ly = link["x"] + min(40, link["width"] / 2), link["y"] + link["height"] / 2
+    pages_before = len(ctx.pages)
+    drag_mouse(page, (lx, ly), (lx - 190, ly))
+    check("G7: 링크 위에서 끌어도 2/5 → 3/5", counter(page) == "3 / 5", counter(page))
+    check("G7: 끌었을 뿐이면 링크는 안 열림", len(ctx.pages) == pages_before, f"{len(ctx.pages)} pages")
+
+    # --- 투표 버튼은 카드 아래 토론에 있고, 그냥 누르면 정상 동작
     page.locator('[data-testid="vote-a"]').click()
     page.wait_for_timeout(900)
     check("G7: 그냥 누르면 투표는 정상 동작", page.locator('[data-testid="vote-a"]').get_attribute("aria-pressed") == "true")
@@ -250,23 +252,23 @@ def scenario_touch(base: str, browser) -> None:
     flick_from = box["x"] + width * 0.78
     flick_to = box["x"] + width * 0.6
 
-    check("G: 터치 시작은 1/4", counter(page) == "1 / 4", counter(page))
+    check("G: 터치 시작은 1/5", counter(page) == "1 / 5", counter(page))
 
-    # 왼쪽으로 스와이프 → 2/4
+    # 왼쪽으로 스와이프 → 2/5
     drag_touch(page, cdp, (right, y), (left, y))
-    check("G3: 터치 스와이프 1/4 → 2/4", counter(page) == "2 / 4", counter(page))
+    check("G3: 터치 스와이프 1/5 → 2/5", counter(page) == "2 / 5", counter(page))
 
-    # 이어서 3/4
+    # 이어서 3/5
     drag_touch(page, cdp, (right, y), (left, y))
-    check("G3: 터치 스와이프 2/4 → 3/4", counter(page) == "3 / 4", counter(page))
+    check("G3: 터치 스와이프 2/5 → 3/5", counter(page) == "3 / 5", counter(page))
 
     # 짧게 튕기기(flick)도 한 장
     drag_touch(page, cdp, (flick_from, y), (flick_to, y), steps=3)
-    check("G3: 짧게 튕겨도 3/4 → 4/4", counter(page) == "4 / 4", counter(page))
+    check("G3: 짧게 튕겨도 3/5 → 4/5", counter(page) == "4 / 5", counter(page))
 
     # 오른쪽으로 되돌리기
     drag_touch(page, cdp, (left, y), (right, y))
-    check("G3: 터치로 되돌리기 4/4 → 3/4", counter(page) == "3 / 4", counter(page))
+    check("G3: 터치로 되돌리기 4/5 → 3/5", counter(page) == "3 / 5", counter(page))
 
     check("G6: 모바일 390 가로 넘침 없음", no_overflow(page))
 
@@ -279,7 +281,7 @@ def scenario_touch(base: str, browser) -> None:
         page.wait_for_timeout(16)
     cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
     page.wait_for_timeout(500)
-    check("G3: 세로로 끌면 카드가 넘어가지 않음", counter(page) == "2 / 4", counter(page))
+    check("G3: 세로로 끌면 카드가 넘어가지 않음", counter(page) == "2 / 5", counter(page))
 
     ctx.close()
 
@@ -293,7 +295,7 @@ def main() -> int:
     base = f"http://127.0.0.1:{port}/"
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"])
+            browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--in-process-gpu"])
             try:
                 print("== G: 마우스 드래그 ==")
                 scenario_mouse(base, browser)

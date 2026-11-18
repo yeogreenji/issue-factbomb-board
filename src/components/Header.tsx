@@ -33,7 +33,7 @@ export function Header({
           </span>
           <div className="brand-text">
             <h1>이슈온도계</h1>
-            <p>오늘의 뉴스를 3장 카드로</p>
+            <p>오늘의 뉴스를 인스타 카드뉴스로</p>
           </div>
         </div>
 

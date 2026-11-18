@@ -31,6 +31,9 @@ function MiniVote({ poll }: { poll: PollSnapshot | null }) {
         <span className="mini-dot" aria-hidden="true" />
         <b>{b}%</b>
         <span className="mini-total">· {countLabel(poll.total)}명</span>
+        {(poll.comments?.length ?? 0) > 0 && (
+          <span className="mini-talk">· 댓글 {poll.comments.length}</span>
+        )}
       </span>
     </span>
   );

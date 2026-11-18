@@ -6,7 +6,7 @@
  *
  *   --api=off     /api/* 를 404로 돌려 GitHub Pages(정적 호스팅)를 흉내냅니다.
  *   --store=redis 가짜 Upstash REST 엔드포인트를 띄워 공용 집계 경로를 그대로 검증합니다.
- *   --feeds=on    가짜 언론사 RSS 7곳을 띄웁니다(실제 언론사에 요청하지 않음). off 면 연결 실패 상황.
+ *   --feeds=on    가짜 언론사 RSS 13곳을 띄웁니다(실제 언론사에 요청하지 않음). off 면 연결 실패 상황.
  *   --ai=gemini   가짜 Gemini — 후보 기사 제목에 맞는 카드 JSON을 돌려줍니다(실제 키 불필요).
  *   --ai=demo     위와 같되, 문서용 스크린샷에 쓰는 정돈된 카드 문구를 씁니다.
  *   --ai=off      AI 키 없이 501/헤드라인 카드 경로를 검증합니다.
@@ -251,12 +251,19 @@ const FIXTURES = [
 ];
 
 function rssFor(slug) {
-  const items = FIXTURES.filter((fixture) => fixture.slug === slug);
+  let items = FIXTURES.filter((fixture) => fixture.slug === slug);
+  // 검증용 피드 13곳을 모두 살아 있게 하려고, 픽스처가 없는 슬러그는 다른 픽스처를 돌려 씁니다.
+  // (같은 제목은 api/trending.ts 에서 중복 제거되므로 카드가 겹치지 않습니다)
+  if (items.length === 0) {
+    let h = 0;
+    for (let i = 0; i < slug.length; i += 1) h = (h * 31 + slug.charCodeAt(i)) % 997;
+    items = [FIXTURES[h % FIXTURES.length], FIXTURES[(h + 3) % FIXTURES.length], FIXTURES[(h + 5) % FIXTURES.length]];
+  }
   const now = Date.now();
   const body = items
     .map((fixture, index) => {
       const date = new Date(now - (index + 1) * 42 * 60 * 1000).toUTCString();
-      const link = `http://127.0.0.1:${PORT}/fake-article/${encodeURIComponent(fixture.title)}`;
+      const link = `http://127.0.0.1:${PORT}/fake-article/${encodeURIComponent(fixture.title)}?feed=${encodeURIComponent(slug)}`;
       const image = `http://127.0.0.1:${PORT}/fake-img/${slug}-${index}.svg`;
       return `<item><title><![CDATA[${fixture.title}]]></title><link>${link}</link><pubDate>${date}</pubDate><description><![CDATA[${fixture.summary}]]></description><media:content url="${image}" type="image/svg+xml" /></item>`;
     })
@@ -330,13 +337,92 @@ function handleFakeRedis(req, res, body) {
 
 let lastGeminiRequest = null;
 
+/** 카드뉴스 5장에 필요한 추가 필드(배경·쟁점·양쪽 라벨·세 번째 팩트) — 검증용 고정 문구입니다. */
+const CARD_EXTRA = {
+  '점심값 1만5천원, 이제 월급에서 빠지는 고정비': {
+    fact3: '조사는 직장인 1천명을 대상으로 했어요.',
+    background: '점심 한 끼 가격이 오르면서 직장인들의 하루 지출 구조가 바뀌고 있어요. 같은 조사에서 외식 대신 도시락·편의점을 고르는 비율도 늘었어요.',
+    point: '식당도 오를 수밖에 없다 vs 월급은 그대로인데 점심값만 오른다',
+    labelA: '식당 쪽',
+    labelB: '직장인 쪽',
+  },
+  '저녁 회식은 사라지고 점심 약속이 남았다': {
+    fact3: '회식 대신 점심으로 사람을 만나는 흐름이 이어지고 있어요.',
+    background: '저녁 회식이 줄고 점심 약속이 늘어난 흐름은 3년째 이어지고 있어요. 회식 대신 점심으로 사람을 만나려는 분위기가 자리 잡는 모습이에요.',
+    point: '일과 저녁을 분리하려는 변화 vs 팀 문화가 끊긴다는 우려',
+    labelA: 'MZ 쪽',
+    labelB: '조직문화 쪽',
+  },
+  '도시락도 1년 새 12% 올랐다': {
+    fact3: '주요 편의점 도시락 가격을 조사한 결과예요.',
+    background: '원재료와 인건비 상승이 이어지면서 편의점 도시락 가격도 함께 올랐어요. 가장 싼 한 끼로 불리던 도시락이 흔들리는 상황이에요.',
+    point: '원가 때문에 어쩔 수 없다 vs 싼 한 끼는 지켜야 한다',
+    labelA: '유통업계',
+    labelB: '소비자',
+  },
+  '한 달 구독료 4만2천원, 그중 두 개는 안 쓴다': {
+    fact3: '조사는 20~30대 구독 이용자를 대상으로 했어요.',
+    background: '구독 경제가 자리 잡으면서 2030의 고정 지출에서 구독료가 차지하는 비중이 커졌어요. 해지 버튼을 찾기 어렵다는 지적도 함께 나와요.',
+    point: '필요할 때만 결제하면 합리적 vs 해지가 어려운 구조가 문제',
+    labelA: '구독 이용자',
+    labelB: '소비자단체',
+  },
+  'AI 붐인데 AI 회사 채용은 반으로 줄었다': {
+    fact3: '국내 AI 스타트업 30곳을 대상으로 조사했어요.',
+    background: 'AI 투자 열기는 이어지지만 개발 인력 채용은 줄어드는 흐름이 뚜렷해요. 모델 개발보다 도입·운영 쪽으로 인력이 옮겨가는 과정이라는 분석도 있어요.',
+    point: 'AI 붐이면 채용도 늘어야 한다 vs 이제는 운영 인력이 필요하다',
+    labelA: '업계',
+    labelB: '구직자',
+  },
+  '웹툰 원작 드라마, 첫 방송에 동시 1위': {
+    fact3: '첫 방송 직후 화제성 지표도 함께 올랐어요.',
+    background: '웹툰·웹소설 원작 드라마가 편성에서 차지하는 비중이 계속 커지고 있어요. 원작 팬덤이 첫 방송부터 화제를 만드는 구도가 반복되고 있어요.',
+    point: '원작 팬덤이 힘이다 vs 원작과 다른 각색은 실망',
+    labelA: '원작 팬',
+    labelB: '드라마 시청자',
+  },
+  '지원금 신청 첫날 3만명, 서버가 먼저 지쳤다': {
+    fact3: '신청 기간은 이번 주까지예요.',
+    background: '청년 대상 지원 사업이 본격 시작되면서 첫날부터 신청이 몰렸어요. 신청 기간이 짧아 첫날 접속이 몰리는 일이 해마다 반복되고 있어요.',
+    point: '첫날 몰림은 어쩔 수 없다 vs 미리 준비했어야 한다',
+    labelA: '운영기관',
+    labelB: '신청자',
+  },
+  'AI 구독료 줄줄이 인상, 기능은 그대로': {
+    fact3: '인상 폭은 서비스마다 달라요.',
+    background: 'AI 서비스 운영 비용이 커지면서 이달 들어 여러 곳이 요금을 올렸어요. 사용자들은 기능 변화 없이 가격만 올랐다며 반발하고 있어요.',
+    point: '운영 비용이 오르니 불가피하다 vs 무엇이 좋아졌는지 먼저 보여 줘라',
+    labelA: '서비스 운영사',
+    labelB: '구독자',
+  },
+  '주 4일제 참여 기업, 1년 만에 두 배': {
+    fact3: '시범 사업 결과는 내년 상반기 공개될 예정이에요.',
+    background: '주 4일제 시범 사업 결과가 쌓이면서 참여 기업이 늘고 있어요. 생산성이 유지되거나 올랐다는 응답이 이어지면서 논의가 확산되는 모습이에요.',
+    point: '업종 따라 이미 통한다 vs 모든 업종에 적용하긴 무리',
+    labelA: '참여 기업',
+    labelB: '회의적인 쪽',
+  },
+};
+
 function cardFromFixture(fixture, mode) {
   const card = fixture.card;
+  const extra = CARD_EXTRA[card.hook] ?? {};
+  const facts = [...card.facts];
+  if (extra.fact3) facts.push(extra.fact3);
+  if (facts.length < 3) {
+    const candidates = fixture.summary.split(/(?<=[.!?])\s+/);
+    for (const sentence of candidates) {
+      if (facts.length >= 3) break;
+      if (!facts.some((fact) => fact.slice(0, 12) === sentence.slice(0, 12))) facts.push(sentence);
+    }
+  }
   return {
     hook: card.hook,
     kicker: mode === 'demo' ? card.kicker : `${fixture.category} · 테스트 카드`,
-    facts: card.facts,
-    sides: card.sides,
+    facts: facts.slice(0, 3),
+    background: extra.background ?? fixture.summary,
+    point: extra.point ?? card.sides.a,
+    sides: { labelA: extra.labelA ?? '한쪽은', labelB: extra.labelB ?? '다른 쪽은', ...card.sides },
     poll: card.poll,
     temp: card.temp,
     category: fixture.category,
@@ -372,13 +458,16 @@ function buildTrendingResult(prompt, mode) {
     // 픽스처에 없는 실제 기사 → 제목·요약만으로 최소 카드
     const body = candidate.body.replace(/\s+/g, ' ').trim();
     const firstSentence = body.split(/(?<=[.!?])\s/)[0] || candidate.title;
+    const secondSentence = body.split(/(?<=[.!?])\s/)[1] ?? candidate.title.slice(0, 70);
     issues.push({
       pick: candidate.pick,
       category: 'mz',
       hook: candidate.title.slice(0, 38),
       kicker: firstSentence.slice(0, 44),
-      facts: [firstSentence.slice(0, 70), body.split(/(?<=[.!?])\s/)[1]?.slice(0, 70) ?? candidate.title.slice(0, 70)],
-      sides: { a: '이해된다는 쪽', b: '아니다 싶은 쪽' },
+      facts: [firstSentence.slice(0, 70), secondSentence.slice(0, 70), candidate.title.slice(0, 70)],
+      background: `${firstSentence.slice(0, 80)} ${secondSentence.slice(0, 80)}`,
+      point: '이 뉴스, 내 일상에 영향 있나요?',
+      sides: { labelA: '이해된다', labelB: '아니다', a: '이해된다는 쪽', b: '아니다 싶은 쪽' },
       poll: { question: '이 뉴스, 내 일상에 영향 있나요?', a: '이미 체감 중', b: '아직 남 일' },
       temp: 55,
       tags: [],
@@ -396,8 +485,10 @@ function buildBriefingResult(prompt, mode) {
     category: 'mz',
     hook: (title || '기사 제목 없음').slice(0, 38),
     kicker: '본문에서 확인한 내용',
-    facts: ['본문 첫 문장을 그대로 옮겼어요.', '두 번째 문장도 원문 기준이에요.'],
-    sides: { a: '이해된다는 쪽', b: '아니다 싶은 쪽' },
+    facts: ['본문 첫 문장을 그대로 옮겼어요.', '두 번째 문장도 원문 기준이에요.', '세 번째 문장까지 원문에서 확인했어요.'],
+    background: '본문에서 확인한 배경을 두 문장으로 정리했어요.',
+    point: '이 이슈, 어디까지 받아들일 수 있을까요?',
+    sides: { labelA: '이해된다', labelB: '아니다', a: '이해된다는 쪽', b: '아니다 싶은 쪽' },
     poll: { question: '이 이슈, 어떻게 봐요?', a: '이해된다', b: '아니다' },
     temp: 58,
     tags: [],

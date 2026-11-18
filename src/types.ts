@@ -8,6 +8,13 @@ export interface IssuePoll {
   b: string;
 }
 
+export interface IssueSides {
+  labelA: string;
+  labelB: string;
+  a: string;
+  b: string;
+}
+
 export interface Issue {
   id: string;
   category: Category;
@@ -18,8 +25,13 @@ export interface Issue {
   image: string;
   hook: string;
   kicker: string;
+  /** 팩트 3줄 */
   facts: string[];
-  sides: { a: string; b: string } | null;
+  /** 왜 지금 떴나 · 배경 */
+  background: string;
+  /** 핵심 쟁점 한 줄 */
+  point: string;
+  sides: IssueSides | null;
   poll: IssuePoll;
   temp: number | null;
   tags: string[];
@@ -57,6 +69,17 @@ export interface BriefingResponse {
   message?: string;
 }
 
+export interface PollComment {
+  id: string;
+  side: "a" | "b";
+  text: string;
+  at: number;
+  tag: string;
+  likes: number;
+  liked: boolean;
+  mine: boolean;
+}
+
 export interface PollSnapshot {
   id: string;
   question: string;
@@ -65,7 +88,8 @@ export interface PollSnapshot {
   counts: { a: number; b: number };
   total: number;
   my: "a" | "b" | null;
-  reactions: { text: string; at: number; tag: string }[];
+  commentCount?: number;
+  comments: PollComment[];
 }
 
 export interface PollsResponse {
@@ -74,15 +98,9 @@ export interface PollsResponse {
   store?: string;
   polls?: Record<string, PollSnapshot>;
   poll?: PollSnapshot;
+  localOnly?: boolean;
   error?: string;
   message?: string;
-}
-
-export interface PollUi {
-  counts: { a: number; b: number };
-  my: "a" | "b" | null;
-  pending: boolean;
-  offline: boolean;
 }
 
 export const CATEGORY_META: Record<Category, { label: string; short: string; color: string; soft: string }> = {

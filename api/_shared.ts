@@ -216,6 +216,80 @@ export function stripBoilerplate(text: string): string {
   return out.replace(/\s{2,}/g, " ").trim();
 }
 
+/* ------------------------------------------------------- news cleaning */
+
+/**
+ * 기사에 늘 따라붙는 사진·영상 캡션, 기자 머리말, 특수문자 — 카드에 넣으면 읽기가 나빠집니다.
+ * 사실은그대로 두고 장식만 걷어냅니다.
+ */
+const PRESS_MARKS: RegExp[] = [
+  /\[(?:사진|영상|그래픽|포토|단독|속보|종합|1보|2보|3보)\]/g,
+  /\((?:사진|자료\s*사진|연합뉴스|뉴시스|사진\s*=)[^)]{0,60}\)/g,
+  /\([^)]{1,25}\)\s*[가-힣]{2,4}\s*(?:기자|특파원)\s*=/g,
+  /[가-힣]{2,4}\s*(?:기자|특파원)\s*=\s*/g,
+  /사진\s*=\s*[^\s,]{1,30}/g,
+  /▶[^\n]{0,60}/g,
+  /(?:무단\s*전재|재배포)\s*(?:및\s*재배포)?\s*금지[^.\n]{0,20}\.?/g,
+  /ⓒ[^\n]{0,80}/g,
+  /Copyrights?[^\n]{0,80}/gi,
+  /구독\s*알림\s*설정[^.\n]{0,20}\.?/g,
+  /네이버\s*(?:채널|포스트|블로그)[^.]{0,30}\.?/g,
+  /카카오톡\s*(?:채널|구독)[^.]{0,30}\.?/g,
+];
+
+/** 홈페이지·RSS에서 섞여 들어오는 깨진 문자·제로폭·중복 공백을 걷어냅니다. */
+export function cleanNewsText(value: unknown, max = 600): string {
+  if (typeof value !== "string") return "";
+  let text = value
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&[a-z]+;/gi, (entity) => decodeEntities(entity))
+    .replace(/\uFFFD+/g, "")
+    .replace(/[\u200b-\u200f\u202a-\u202e\u2060\ufeff]/g, "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
+  for (const mark of PRESS_MARKS) text = text.replace(mark, " ");
+  return text
+    .replace(/([.!?])(?=[가-힣])/g, "$1 ")
+    .replace(/([가-힣][.!?])(?=[0-9])/g, "$1 ")
+    .replace(/[\u00a0\u3000]/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^[\s·•\-–—|,]+/, "")
+    .trim()
+    .slice(0, max);
+}
+
+/** 문장 단위로 자릅니다. 너무 짧은 조각(제목·캡션 잔여)과 따옴표로 시작하는 토막은 버립니다. */
+export function splitSentences(value: string, max = 6): string[] {
+  return cleanNewsText(value, 4_000)
+    .split(/(?<=[.!?。])\s+|(?<=다\.)\s+|\n+/)
+    .map((line) => cleanNewsText(line, 400))
+    .filter((line) => line.length >= 20 && !/^["'”’]/.test(line))
+    .slice(0, max);
+}
+
+/** 숫자·고유명사가 들어간 문장을 팩트로 우선합니다(추상적인 문장보다 읽을거리가 됩니다). */
+export function factScore(sentence: string): number {
+  let score = Math.min(sentence.length, 90) / 10;
+  if (/\d/.test(sentence)) score += 4;
+  if (/%|배|명|원|만|억|년|개월|시간/.test(sentence)) score += 2;
+  if (/(밝혔|발표|결정|확인|집계|조사|전망|예정|기록|돌파)/.test(sentence)) score += 1.5;
+  return score;
+}
+
+/** 문장을 팩트 카드용으로 다듬습니다 — 단어 중간에서 자르지 않고, 끝맺음이 없으면 마침표를 붙입니다. */
+export function asSentence(value: string, max = 90): string {
+  let text = cleanNewsText(value, max * 3);
+  if (!text) return "";
+  let clipped = false;
+  if (text.length > max) {
+    const cut = text.slice(0, max - 1);
+    const space = cut.lastIndexOf(" ");
+    text = (space > max * 0.55 ? cut.slice(0, space) : cut).replace(/[,.·\-–—]?$/, "").trim();
+    clipped = true;
+  }
+  if (clipped) return `${text}…`;
+  return /[.!?…]$/.test(text) ? text : `${text}.`;
+}
+
 export function htmlToText(html: string): string {
   const withoutNoise = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")

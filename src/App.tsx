@@ -7,7 +7,8 @@ import {
   fetchIssue,
   fetchPolls,
   fetchTrending,
-  sendReaction,
+  sendComment,
+  sendLike,
   sendVote,
 } from "./lib/api";
 import { copyText, issueLink, shareIssue } from "./lib/share";
@@ -25,6 +26,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [polls, setPolls] = useState<Record<string, PollSnapshot>>({});
+  const [localOnly, setLocalOnly] = useState(false);
   const [extra, setExtra] = useState<Issue[]>([]);
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [voting, setVoting] = useState(false);
@@ -35,8 +37,9 @@ export default function App() {
 
   const loadPolls = useCallback(async (issues: Issue[]) => {
     try {
-      const res = await fetchPolls(issues.map((issue) => issue.id));
-      if (res.ok && res.polls) setPolls((prev) => ({ ...prev, ...res.polls }));
+      const res = await fetchPolls(issues.map((issue) => issue.id), issues);
+      if (res.polls) setPolls((prev) => ({ ...prev, ...res.polls }));
+      if (res.localOnly) setLocalOnly(true);
     } catch {
       /* 투표 집계는 없어도 카드는 읽을 수 있습니다 */
     }
@@ -146,35 +149,63 @@ export default function App() {
     setVoting(true);
     try {
       const res = await sendVote(issue, choice);
-      if (res.ok && res.poll) setPolls((prev) => ({ ...prev, [issue.id]: res.poll as PollSnapshot }));
-      else throw new Error(res.message ?? "vote failed");
+      if (res.poll) setPolls((prev) => ({ ...prev, [issue.id]: res.poll as PollSnapshot }));
+      if (res.localOnly) {
+        setLocalOnly(true);
+        setToast("연결이 없어 표가 이 기기에만 남았어요.");
+      }
     } catch {
+      setLocalOnly(true);
       setToast("연결이 없어 표가 이 기기에만 남았어요.");
     } finally {
       setVoting(false);
     }
   };
 
-  const onReact = async (issue: Issue, text: string): Promise<boolean> => {
-    const current = polls[issue.id] ?? emptyPoll(issue);
+  const onComment = async (issue: Issue, side: "a" | "b", text: string): Promise<boolean> => {
     try {
-      const res = await sendReaction(issue, text);
-      if (res.ok && res.poll) {
-        setPolls((prev) => ({ ...prev, [issue.id]: res.poll as PollSnapshot }));
-        return true;
+      const res = await sendComment(issue, side, text);
+      if (res.poll) {
+        const nextPoll = res.poll as PollSnapshot;
+        setPolls((prev) => {
+          const current = prev[issue.id];
+          if (res.ok || !current) return { ...prev, [issue.id]: nextPoll };
+          // 연결이 끊겨도 화면의 투표 수는 유지하고, 방금 쓴 댓글만 이 기기에 붙입니다.
+          return {
+            ...prev,
+            [issue.id]: { ...current, comments: nextPoll.comments, commentCount: nextPoll.comments.length },
+          };
+        });
       }
-      throw new Error(res.message ?? "reaction failed");
+      if (res.localOnly) {
+        setLocalOnly(true);
+        setToast("연결이 없어 댓글이 이 기기에만 남았어요.");
+      }
     } catch {
-      setPolls((prev) => ({
-        ...prev,
-        [issue.id]: {
-          ...current,
-          reactions: [...current.reactions, { text, at: Date.now(), tag: "나" }].slice(-30),
-        },
-      }));
-      setToast("연결이 없어 반응이 이 기기에만 남았어요.");
-      return true;
+      setLocalOnly(true);
+      setToast("연결이 없어 댓글이 이 기기에만 남았어요.");
     }
+    return true;
+  };
+
+  const onLike = async (issue: Issue, commentId: string) => {
+    setPolls((prev) => {
+      const poll = prev[issue.id];
+      if (!poll) return prev;
+      const comments = poll.comments.map((comment) =>
+        comment.id === commentId
+          ? {
+              ...comment,
+              liked: !comment.liked,
+              likes: Math.max(0, comment.likes + (comment.liked ? -1 : 1)),
+            }
+          : comment,
+      );
+      return { ...prev, [issue.id]: { ...poll, comments } };
+    });
+    const res = await sendLike(issue, commentId);
+    if (res.poll) setPolls((prev) => ({ ...prev, [issue.id]: res.poll as PollSnapshot }));
+    if (res.localOnly) setLocalOnly(true);
   };
 
   const onShare = async (issue: Issue) => {
@@ -284,15 +315,15 @@ export default function App() {
               <ol>
                 <li>
                   <b>1</b>
-                  <span>오늘 언론사 RSS에서 실제 기사를 긁어옵니다</span>
+                  <span>오늘 언론사 RSS 13곳에서 실제 기사를 긁어옵니다</span>
                 </li>
                 <li>
                   <b>2</b>
-                  <span>AI가 한 줄 훅·팩트 2줄·양쪽 입장으로 카드 3장을 만듭니다</span>
+                  <span>AI가 표지 훅·팩트 3줄·배경·쟁점·A vs B로 카드 5장을 만듭니다</span>
                 </li>
                 <li>
                   <b>3</b>
-                  <span>A vs B 투표하고 친구에게 링크로 보냅니다</span>
+                  <span>PNG로 저장해 인스타에 올리고, 아래에서 투표·토론으로 이어집니다</span>
                 </li>
               </ol>
             </section>
@@ -313,11 +344,18 @@ export default function App() {
           issue={viewerIssue}
           poll={polls[viewerIssue.id] ?? emptyPoll(viewerIssue)}
           voting={voting}
+          localOnly={localOnly}
           onClose={closeViewer}
           onVote={(choice) => void onVote(viewerIssue, choice)}
-          onReact={(text) => onReact(viewerIssue, text)}
+          onComment={(side, text) => onComment(viewerIssue, side, text)}
+          onLike={(commentId) => void onLike(viewerIssue, commentId)}
           onShare={() => void onShare(viewerIssue)}
           onCopy={() => void onCopy(viewerIssue)}
+          onCopyCaption={async (caption) => {
+            const ok = await copyText(caption);
+            setToast(ok ? "캡션을 복사했어요. 인스타에 붙여넣으세요." : "복사하지 못했어요.");
+          }}
+          onToast={setToast}
         />
       )}
 

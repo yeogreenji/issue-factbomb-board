@@ -1,12 +1,14 @@
 /**
- * 이슈온도계 — A/B 투표 · 한 줄 반응 (Vercel 서버리스 함수)
+ * 이슈온도계 — A/B 투표 · 토론 댓글 (Vercel 서버리스 함수)
  *
- * GET  /api/poll?ids=id1,id2&voterId=…   여러 카드의 투표 집계를 한 번에
- * POST /api/poll                          { action: "vote",  issueId, question, a, b, choice: "a"|"b", voterId }
- *                                         { action: "react", issueId, text, voterId }
+ * GET  /api/poll?ids=id1,id2&voterId=…   여러 카드의 투표·댓글 집계를 한 번에
+ * POST /api/poll  { action: "vote",    issueId, question, a, b, choice: "a"|"b", voterId }
+ *                 { action: "comment", issueId, question, a, b, side: "a"|"b", text, voterId }
+ *                 { action: "like",    issueId, commentId, voterId }
  *
  * 저장소 자동 선택: Upstash Redis → Supabase → 함수 메모리.
  * 어디에도 계정·IP는 저장하지 않습니다. 브라우저가 만든 익명 voterId만 쓰고, 응답에는 다시 내보내지 않습니다.
+ * 공용 저장소가 없으면 함수 메모리에 남고, 그마저 초기화되면 브라우저(localStorage)가 자기 표·댓글을 다시 보여 줍니다.
  */
 
 import {
@@ -26,15 +28,27 @@ import {
 
 export const config = { maxDuration: 30 };
 
-const DOC_KEY = "issue-thermo:polls:v1";
+const DOC_KEY = "issue-thermo:polls:v2";
 const MAX_ISSUES = 400;
 const MAX_VOTERS_PER_ISSUE = 20_000;
-const MAX_REACTIONS_PER_ISSUE = 120;
+const MAX_COMMENTS_PER_ISSUE = 200;
+const MAX_LIKERS_PER_COMMENT = 5_000;
+const MAX_COMMENT_CHARS = 220;
 
 const ID_PATTERN = /^[A-Za-z0-9_-]{6,64}$/;
 const VOTER_PATTERN = /^[A-Za-z0-9_-]{6,72}$/;
+const COMMENT_PATTERN = /^c[A-Za-z0-9]{4,40}$/;
 
 type Choice = "a" | "b";
+
+interface CommentItem {
+  id: string;
+  side: Choice;
+  text: string;
+  at: number;
+  tag: string;
+  likes: string[];
+}
 
 interface PollItem {
   question: string;
@@ -42,17 +56,21 @@ interface PollItem {
   b: string;
   votes: Record<Choice, number>;
   voters: Record<string, Choice>;
-  reactions: { text: string; at: number; tag: string }[];
+  comments: CommentItem[];
 }
 
 interface PollDoc {
-  version: 1;
+  version: 2;
   items: Record<string, PollItem>;
   updatedAt: number;
 }
 
 function emptyDoc(): PollDoc {
-  return { version: 1, items: {}, updatedAt: 0 };
+  return { version: 2, items: {}, updatedAt: 0 };
+}
+
+function commentId(): string {
+  return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function normalizeDoc(raw: unknown): PollDoc {
@@ -70,17 +88,28 @@ function normalizeDoc(raw: unknown): PollDoc {
       }
     }
     const votesRaw = item.votes && typeof item.votes === "object" ? (item.votes as Record<string, unknown>) : {};
-    const reactions = Array.isArray(item.reactions)
-      ? item.reactions
+    const comments: CommentItem[] = Array.isArray(item.comments)
+      ? item.comments
           .map((entry) => {
             if (!entry || typeof entry !== "object") return null;
             const r = entry as Record<string, unknown>;
-            const text = clean(r.text, 60);
+            const text = clean(r.text, MAX_COMMENT_CHARS);
+            const side = r.side === "b" ? "b" : "a";
             if (!text) return null;
-            return { text, at: clampInt(r.at, 0, Number.MAX_SAFE_INTEGER, Date.now()), tag: clean(r.tag, 6) || "익명" };
+            const likes = Array.isArray(r.likes)
+              ? r.likes.filter((liker): liker is string => typeof liker === "string" && VOTER_PATTERN.test(liker)).slice(0, MAX_LIKERS_PER_COMMENT)
+              : [];
+            return {
+              id: COMMENT_PATTERN.test(String(r.id ?? "")) ? String(r.id) : commentId(),
+              side: side as Choice,
+              text,
+              at: clampInt(r.at, 0, Number.MAX_SAFE_INTEGER, Date.now()),
+              tag: clean(r.tag, 6) || "익명",
+              likes,
+            };
           })
-          .filter((entry): entry is { text: string; at: number; tag: string } => Boolean(entry))
-          .slice(-MAX_REACTIONS_PER_ISSUE)
+          .filter((entry): entry is CommentItem => Boolean(entry))
+          .slice(-MAX_COMMENTS_PER_ISSUE)
       : [];
 
     doc.items[id] = {
@@ -92,7 +121,7 @@ function normalizeDoc(raw: unknown): PollDoc {
         b: clampInt(votesRaw.b, 0, 10_000_000, 0),
       },
       voters,
-      reactions,
+      comments,
     };
   }
   doc.updatedAt = clampInt(row.updatedAt, 0, Number.MAX_SAFE_INTEGER, 0);
@@ -108,9 +137,10 @@ function voterTag(voterId: string): string {
   return (h >>> 0).toString(36).slice(0, 4);
 }
 
-/** 응답에는 집계와 내 선택만. 다른 사람의 voterId는 절대 나가지 않습니다. */
+/** 응답에는 집계와 내 선택·내 댓글 표시만. 다른 사람의 voterId는 절대 나가지 않습니다. */
 function snapshot(id: string, item: PollItem, voterId: string) {
   const total = item.votes.a + item.votes.b;
+  const newestFirst = [...item.comments].reverse().slice(0, 60);
   return {
     id,
     question: item.question,
@@ -119,7 +149,17 @@ function snapshot(id: string, item: PollItem, voterId: string) {
     counts: { a: item.votes.a, b: item.votes.b },
     total,
     my: voterId ? item.voters[voterId] ?? null : null,
-    reactions: item.reactions.slice(-30).map((entry) => ({ text: entry.text, at: entry.at, tag: entry.tag })),
+    commentCount: item.comments.length,
+    comments: newestFirst.map((entry) => ({
+      id: entry.id,
+      side: entry.side,
+      text: entry.text,
+      at: entry.at,
+      tag: entry.tag,
+      likes: entry.likes.length,
+      liked: Boolean(voterId) && entry.likes.includes(voterId),
+      mine: Boolean(voterId) && entry.tag === voterTag(voterId),
+    })),
   };
 }
 
@@ -160,7 +200,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  if (rateLimited("poll", clientIp(req), 60, 60_000)) {
+  if (rateLimited("poll", clientIp(req), 80, 60_000)) {
     res.status(429).json({ ok: false, error: "rate_limited", message: "잠시 요청이 몰렸습니다. 잠시 뒤 다시 시도해 주세요." });
     return;
   }
@@ -193,7 +233,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     b: clean(body.b, 60) || "B",
     votes: { a: 0, b: 0 },
     voters: {},
-    reactions: [],
+    comments: [],
   };
 
   if (action === "vote") {
@@ -218,15 +258,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       item.votes[choice] += 1;
       item.voters[actor] = choice;
     }
-  } else if (action === "react") {
-    const text = clean(body.text, 60);
-    if (text.length < 2) {
-      res.status(400).json({ ok: false, error: "bad_reaction", message: "한 줄 반응을 2자 이상 적어 주세요." });
+  } else if (action === "comment") {
+    const text = clean(body.text, MAX_COMMENT_CHARS);
+    const side = clean(body.side, 2) as Choice;
+    if (side !== "a" && side !== "b") {
+      res.status(400).json({ ok: false, error: "bad_side", message: "A/B 중 어느 쪽 의견인지 골라 주세요." });
       return;
     }
-    item.reactions = [...item.reactions, { text, at: Date.now(), tag: voterTag(actor) }].slice(-MAX_REACTIONS_PER_ISSUE);
+    if (text.length < 2) {
+      res.status(400).json({ ok: false, error: "bad_comment", message: "의견을 2자 이상 적어 주세요." });
+      return;
+    }
+    const mine = item.comments.filter((comment) => comment.tag === voterTag(actor));
+    if (mine.length >= 5) {
+      res.status(429).json({ ok: false, error: "comment_limit", message: "한 카드에는 5개까지 남길 수 있어요." });
+      return;
+    }
+    // 브라우저가 만든 id를 그대로 쓰면, 서버가 초기화돼도 내 브라우저에 남은 댓글과 같은 댓글로 이어집니다.
+    const provided = clean(body.commentId, 40);
+    const id =
+      COMMENT_PATTERN.test(provided) && !item.comments.some((comment) => comment.id === provided)
+        ? provided
+        : commentId();
+    item.comments = [
+      ...item.comments,
+      { id, side, text, at: Date.now(), tag: voterTag(actor), likes: [] },
+    ].slice(-MAX_COMMENTS_PER_ISSUE);
+  } else if (action === "like") {
+    const commentIdRaw = clean(body.commentId, 40);
+    if (!COMMENT_PATTERN.test(commentIdRaw)) {
+      res.status(400).json({ ok: false, error: "bad_comment_id", message: "댓글을 찾을 수 없습니다." });
+      return;
+    }
+    const target = item.comments.find((comment) => comment.id === commentIdRaw);
+    if (!target) {
+      res.status(404).json({ ok: false, error: "comment_not_found", message: "이미 지워졌거나 없는 댓글이에요." });
+      return;
+    }
+    if (target.likes.includes(actor)) target.likes = target.likes.filter((liker) => liker !== actor);
+    else if (target.likes.length < MAX_LIKERS_PER_COMMENT) target.likes = [...target.likes, actor];
   } else {
-    res.status(400).json({ ok: false, error: "unknown_action", message: "action은 vote·react 중 하나입니다." });
+    res.status(400).json({ ok: false, error: "unknown_action", message: "action은 vote·comment·like 중 하나입니다." });
     return;
   }
 
@@ -235,7 +307,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const ids = Object.keys(doc.items);
   if (ids.length > MAX_ISSUES) {
-    const keep = ids.sort((a, b) => doc.items[a].reactions.length - doc.items[b].reactions.length).slice(-MAX_ISSUES);
+    const keep = ids
+      .sort((a, b) => doc.items[a].comments.length + doc.items[a].votes.a + doc.items[a].votes.b - (doc.items[b].comments.length + doc.items[b].votes.a + doc.items[b].votes.b))
+      .slice(-MAX_ISSUES);
     doc.items = Object.fromEntries(keep.map((id) => [id, doc.items[id]]));
   }
 

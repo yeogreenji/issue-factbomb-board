@@ -3,31 +3,53 @@ import {
   ArrowUpRight,
   ChevronLeft,
   ChevronRight,
+  Clipboard,
+  Download,
+  FileArchive,
   Link2,
-  MessageCircle,
   Share2,
   X,
 } from "lucide-react";
 import { CATEGORY_META, type Issue, type PollSnapshot } from "../types";
-import { countLabel, percentOf, tempLabel, timeAgo } from "../lib/format";
+import { tempLabel, timeAgo } from "../lib/format";
 import { useSwipeDeck } from "../lib/useSwipeDeck";
+import { captionFor } from "../lib/share";
+import { SLIDE_COUNT, saveAllCards, saveSlidePng } from "../lib/cardImage";
 import { TempGauge } from "./TempGauge";
+import { Discussion } from "./Discussion";
 
 interface Props {
   issue: Issue;
   poll: PollSnapshot;
   voting: boolean;
+  localOnly?: boolean;
   onClose: () => void;
   onVote: (choice: "a" | "b") => void;
-  onReact: (text: string) => Promise<boolean>;
+  onComment: (side: "a" | "b", text: string) => Promise<boolean>;
+  onLike: (commentId: string) => void;
   onShare: () => void;
   onCopy: () => void;
+  onCopyCaption: (caption: string) => void;
+  onToast: (message: string) => void;
 }
 
-const SLIDES = 4;
-
-export function CardNewsViewer({ issue, poll, voting, onClose, onVote, onReact, onShare, onCopy }: Props) {
-  const { index, wrapRef, trackRef, go, jump, handlers } = useSwipeDeck(SLIDES);
+export function CardNewsViewer({
+  issue,
+  poll,
+  voting,
+  localOnly,
+  onClose,
+  onVote,
+  onComment,
+  onLike,
+  onShare,
+  onCopy,
+  onCopyCaption,
+  onToast,
+}: Props) {
+  const { index, wrapRef, trackRef, go, jump, handlers } = useSwipeDeck(SLIDE_COUNT);
+  const [saving, setSaving] = useState<"one" | "all" | null>(null);
+  const [captionOpen, setCaptionOpen] = useState(false);
   const meta = CATEGORY_META[issue.category];
   const labelA = poll.a || issue.poll.a;
   const labelB = poll.b || issue.poll.b;
@@ -46,290 +68,264 @@ export function CardNewsViewer({ issue, poll, voting, onClose, onVote, onReact, 
     };
   }, [onClose, go]);
 
-  return (
-    <div className="viewer" data-testid="viewer" style={{ ["--accent" as string]: meta.color }}>
-      <div className="viewer-shell">
-        <div className="viewer-top">
-          <div className="progress">
-            {Array.from({ length: SLIDES }).map((_, i) => (
-              <button
-                key={i}
-                type="button"
-                className="progress-seg"
-                data-on={i <= index}
-                aria-label={`${i + 1}장으로 이동`}
-                aria-current={i === index}
-                onClick={() => jump(i)}
-                data-testid={`progress-${i + 1}`}
-              />
-            ))}
-          </div>
-          <div className="viewer-bar">
-            <a className="viewer-src" href={issue.url} target="_blank" rel="noreferrer noopener">
-              {issue.source}
-              <ArrowUpRight size={13} />
-            </a>
-            <span className="viewer-count" aria-hidden="true">
-              {index + 1} / {SLIDES}
-            </span>
-            <button type="button" className="viewer-close" onClick={onClose} aria-label="닫기" data-testid="close-viewer">
-              <X size={18} />
-            </button>
-          </div>
-        </div>
-
-        <div className="slides-wrap" ref={wrapRef} data-testid="slides" data-index={index} {...handlers}>
-          <div className="slides" ref={trackRef} style={{ transform: `translate3d(${-index * 100}%, 0, 0)` }}>
-            {/* ① 표지 */}
-            <section className="slide slide-cover" data-testid="slide-1" aria-hidden={index !== 0}>
-              <div className="cover-full" style={{ ["--chip" as string]: meta.color }}>
-                {issue.image ? (
-                  <img
-                    className="cover-photo"
-                    src={issue.image}
-                    alt=""
-                    draggable={false}
-                    referrerPolicy="no-referrer"
-                    onError={(event) => {
-                      event.currentTarget.style.display = "none";
-                    }}
-                  />
-                ) : (
-                  <span className="cover-glyph" aria-hidden="true">
-                    {meta.short}
-                  </span>
-                )}
-                <span className="cover-shade" aria-hidden="true" />
-                <div className="cover-top">
-                  <span className="chip chip-onDark">{meta.label}</span>
-                  <span className="cover-temp">
-                    <TempGauge temp={issue.temp} size="sm" />
-                  </span>
-                </div>
-                <div className="cover-text">
-                  <h2 className="cover-hook">{issue.hook}</h2>
-                  <p className="cover-kicker">{issue.kicker}</p>
-                  <p className="cover-src">
-                    {issue.source}
-                    <span> · {timeAgo(issue.publishedAt)}</span>
-                    {issue.temp !== null && <span> · 지금 {issue.temp}° {tempLabel(issue.temp)}</span>}
-                  </p>
-                </div>
-                <p className="cover-next">
-                  3장 더 있어요 · 옆으로 넘기세요 <ChevronRight size={13} />
-                </p>
-              </div>
-            </section>
-
-            {/* ② 무슨 일인데 */}
-            <section className="slide slide-facts" data-testid="slide-2" aria-hidden={index !== 1}>
-              <span className="slide-ghost" aria-hidden="true">
-                01
-              </span>
-              <p className="eyebrow">01 · 무슨 일인데</p>
-              <div className="slide-body">
-                <ul className="facts">
-                  {issue.facts.slice(0, 2).map((fact, i) => (
-                    <li key={i}>
-                      <span className="fact-num" aria-hidden="true">
-                        {i + 1}
-                      </span>
-                      <span className="fact-text">{fact}</span>
-                    </li>
-                  ))}
-                </ul>
-                {issue.tags.length > 0 && (
-                  <div className="slide-tags">
-                    {issue.tags.map((tag) => (
-                      <span key={tag} className="slide-tag-chip">
-                        #{tag}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="slide-foot">
-                <p className="origin-title">원제 · {issue.title}</p>
-                {!issue.ai && (
-                  <p className="slide-note">
-                    AI 요약이 꺼져 있어 언론사 제목과 요약만 옮겼어요. 자세한 내용은 원문에서 확인해 주세요.
-                  </p>
-                )}
-                <a className="slide-link" href={issue.url} target="_blank" rel="noreferrer noopener">
-                  원문 기사 보기 <ArrowUpRight size={14} />
-                </a>
-              </div>
-            </section>
-
-            {/* ③ 어디서 갈리나 */}
-            <section className="slide slide-sides" data-testid="slide-3" aria-hidden={index !== 2}>
-              <span className="slide-ghost" aria-hidden="true">
-                02
-              </span>
-              <p className="eyebrow">02 · 어디서 갈리나</p>
-              <div className="slide-body">
-                {issue.sides ? (
-                  <div className="sides">
-                    <div className="side side-a">
-                      <span className="side-tag">한쪽은</span>
-                      <p>{issue.sides.a}</p>
-                    </div>
-                    <div className="side-vs" aria-hidden="true">
-                      VS
-                    </div>
-                    <div className="side side-b">
-                      <span className="side-tag">다른 쪽은</span>
-                      <p>{issue.sides.b}</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="sides-empty">
-                    <p>이 카드는 AI 요약이 없어 양쪽 입장 정리가 없어요.</p>
-                    <a className="slide-link" href={issue.url} target="_blank" rel="noreferrer noopener">
-                      원문에서 확인하기 <ArrowUpRight size={14} />
-                    </a>
-                  </div>
-                )}
-              </div>
-              <div className="slide-foot">
-                <p className="slide-hint">넘겨서 바로 투표해 보세요 →</p>
-              </div>
-            </section>
-
-            {/* ④ 투표 */}
-            <section className="slide slide-vote" data-testid="slide-4" aria-hidden={index !== 3}>
-              <span className="slide-ghost" aria-hidden="true">
-                03
-              </span>
-              <p className="eyebrow">03 · 당신은?</p>
-              <div className="slide-body">
-                <h3 className="vote-q">{poll.question}</h3>
-
-                <div className="opts" data-voted={Boolean(poll.my)}>
-                  {(["a", "b"] as const).map((side) => {
-                    const pct = percentOf(poll.counts, side);
-                    const mine = poll.my === side;
-                    return (
-                      <button
-                        key={side}
-                        type="button"
-                        className="opt"
-                        data-side={side}
-                        data-mine={mine}
-                        aria-pressed={mine}
-                        onClick={() => onVote(side)}
-                        disabled={voting}
-                        data-testid={`vote-${side}`}
-                      >
-                        <span className="opt-bar" style={{ width: `${poll.my ? pct : 0}%` }} aria-hidden="true" />
-                        <span className="opt-line">
-                          <span className="opt-key" aria-hidden="true">
-                            {side.toUpperCase()}
-                          </span>
-                          <span className="opt-label">{side === "a" ? labelA : labelB}</span>
-                          {poll.my && (
-                            <span className="opt-pct" data-testid={`result-${side}`}>
-                              {pct}%
-                            </span>
-                          )}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <p className="vote-foot" aria-live="polite">
-                  {poll.total > 0 ? `${countLabel(poll.total)}명 참여` : "첫 표를 남겨 보세요"}
-                  {poll.my ? " · 다시 누르면 바뀝니다" : ""}
-                </p>
-
-                <Reactions poll={poll} onReact={onReact} />
-              </div>
-              <div className="slide-foot share-row">
-                <button type="button" className="share-btn" onClick={onShare} data-testid="share">
-                  <Share2 size={16} /> 공유하기
-                </button>
-                <button type="button" className="share-btn is-ghost" onClick={onCopy} data-testid="copy-link">
-                  <Link2 size={16} /> 링크 복사
-                </button>
-              </div>
-            </section>
-          </div>
-        </div>
-
-        <div className="viewer-nav">
-          <button type="button" onClick={() => go(-1)} disabled={index === 0} aria-label="이전 카드" data-testid="prev">
-            <ChevronLeft size={20} />
-          </button>
-          <div className="dots">
-            {Array.from({ length: SLIDES }).map((_, i) => (
-              <button
-                key={i}
-                type="button"
-                className="dot-item"
-                data-on={i === index}
-                aria-label={`${i + 1}장으로 이동`}
-                aria-current={i === index}
-                onClick={() => jump(i)}
-              />
-            ))}
-          </div>
-          {index < SLIDES - 1 ? (
-            <button type="button" onClick={() => go(1)} aria-label="다음 카드" data-testid="next">
-              <ChevronRight size={20} />
-            </button>
-          ) : (
-            <button type="button" onClick={onClose} aria-label="닫기" className="nav-done">
-              닫기
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Reactions({ poll, onReact }: { poll: PollSnapshot; onReact: (text: string) => Promise<boolean> }) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const list = poll.reactions.slice(-4).reverse();
-
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const value = text.trim();
-    if (value.length < 2 || busy) return;
-    setBusy(true);
-    const ok = await onReact(value);
-    setBusy(false);
-    if (ok) setText("");
+  const saveCurrent = async () => {
+    if (saving) return;
+    setSaving("one");
+    try {
+      await saveSlidePng(issue, index);
+      onToast(`${index + 1}장을 PNG로 저장했어요.`);
+    } catch {
+      onToast("이미지를 만들지 못했어요. 잠시 뒤 다시 시도해 주세요.");
+    } finally {
+      setSaving(null);
+    }
   };
 
+  const saveAll = async () => {
+    if (saving) return;
+    setSaving("all");
+    try {
+      const count = await saveAllCards(issue);
+      onToast(`${count}장을 ZIP 파일로 저장했어요.`);
+    } catch {
+      onToast("이미지를 만들지 못했어요. 잠시 뒤 다시 시도해 주세요.");
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const caption = captionFor(issue);
+
   return (
-    <div className="react-block">
-      <form className="react-form" onSubmit={submit}>
-        <input
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          placeholder="한 줄로 한마디 (선택)"
-          maxLength={60}
-          aria-label="한 줄 반응"
-          data-testid="reaction-input"
-        />
-        <button type="submit" disabled={busy || text.trim().length < 2} data-testid="reaction-submit">
-          <MessageCircle size={15} />
-          남기기
-        </button>
-      </form>
-      {list.length > 0 && (
-        <ul className="react-list" data-testid="reaction-list">
-          {list.map((item, i) => (
-            <li key={`${item.at}-${i}`}>
-              <span className="react-tag">{item.tag}</span>
-              {item.text}
-            </li>
-          ))}
-        </ul>
-      )}
+    <div className="cn" data-testid="viewer" style={{ ["--accent" as string]: meta.color, ["--accent-soft" as string]: meta.soft }}>
+      <div className="cn-shell">
+        <header className="cn-top">
+          <button type="button" className="cn-icon" onClick={onClose} aria-label="닫기" data-testid="close-viewer">
+            <X size={18} />
+          </button>
+          <div className="cn-top-mid">
+            <a className="cn-src" href={issue.url} target="_blank" rel="noreferrer noopener">
+              {issue.source} <ArrowUpRight size={12} />
+            </a>
+            <span className="cn-top-meta">
+              {timeAgo(issue.publishedAt)}
+              {issue.temp !== null && ` · ${issue.temp}° ${tempLabel(issue.temp)}`}
+            </span>
+          </div>
+          <span className="cn-count" aria-hidden="true">
+            {index + 1} / {SLIDE_COUNT}
+          </span>
+          <button type="button" className="cn-icon" onClick={onShare} aria-label="공유" data-testid="share">
+            <Share2 size={17} />
+          </button>
+        </header>
+
+        <div className="cn-scroll">
+          <div className="cn-left">
+            <div className="cn-progress" aria-hidden="true">
+              {Array.from({ length: SLIDE_COUNT }).map((_, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  className="cn-seg"
+                  data-on={i <= index}
+                  aria-label={`${i + 1}장으로 이동`}
+                  aria-current={i === index}
+                  onClick={() => jump(i)}
+                  data-testid={`progress-${i + 1}`}
+                />
+              ))}
+            </div>
+
+            <div className="cn-card">
+              <div className="cn-track-wrap" ref={wrapRef} data-testid="slides" data-index={index} {...handlers}>
+                <div className="cn-track" ref={trackRef} style={{ transform: `translate3d(${-index * 100}%, 0, 0)` }}>
+                  {/* ① 표지 */}
+                  <section className="slide cn-cover" data-testid="slide-1" aria-hidden={index !== 0}>
+                    <span className="cn-ghost" aria-hidden="true">
+                      01
+                    </span>
+                    <div className="cn-cover-top">
+                      <span className="cn-chip">{meta.label}</span>
+                      <span className="cn-temp">
+                        <TempGauge temp={issue.temp} size="sm" />
+                      </span>
+                    </div>
+                    <div className="cn-cover-text">
+                      <h2 className="cn-hook">{issue.hook}</h2>
+                      <p className="cn-kicker">{issue.kicker}</p>
+                    </div>
+                    <p className="cn-cover-foot">
+                      {issue.source} · {timeAgo(issue.publishedAt)}
+                    </p>
+                  </section>
+
+                  {/* ② 팩트 3줄 */}
+                  <section className="slide cn-facts" data-testid="slide-2" aria-hidden={index !== 1}>
+                    <p className="cn-eyebrow">01 · 무슨 일인데</p>
+                    <ul className="cn-fact-list">
+                      {issue.facts.slice(0, 3).map((fact, i) => (
+                        <li key={i}>
+                          <span className="cn-fact-num" aria-hidden="true">
+                            {i + 1}
+                          </span>
+                          <span className="cn-fact-text">{fact}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="cn-fact-foot">
+                      {issue.tags.length > 0 && (
+                        <p className="cn-tags">
+                          {issue.tags.map((tag) => (
+                            <span key={tag}>#{tag}</span>
+                          ))}
+                        </p>
+                      )}
+                      <p className="cn-origin">원제 · {issue.title}</p>
+                      {!issue.ai && <p className="cn-note">AI 요약 없이 언론사 제목·요약만 옮겼어요. 자세한 내용은 원문에서 확인해 주세요.</p>}
+                      <a className="cn-link" href={issue.url} target="_blank" rel="noreferrer noopener">
+                        원문 기사 보기 <ArrowUpRight size={13} />
+                      </a>
+                    </div>
+                  </section>
+
+                  {/* ③ 배경·쟁점 */}
+                  <section className="slide cn-issue" data-testid="slide-3" aria-hidden={index !== 2}>
+                    <p className="cn-eyebrow">02 · 왜 지금 뜨나</p>
+                    <div className="cn-issue-main">
+                      <p className="cn-background">{issue.background || issue.kicker}</p>
+                      <div className="cn-point">
+                        <span>핵심 쟁점</span>
+                        <p>{issue.point || issue.poll.question}</p>
+                      </div>
+                    </div>
+                    <p className="cn-slide-foot-note">{issue.source} 보도 · {timeAgo(issue.publishedAt)}</p>
+                  </section>
+
+                  {/* ④ A vs B */}
+                  <section className="slide cn-sides" data-testid="slide-4" aria-hidden={index !== 3}>
+                    <p className="cn-eyebrow">03 · A vs B</p>
+                    {issue.sides ? (
+                      <div className="cn-side-stack">
+                        <div className="cn-side cn-side-a">
+                          <span className="cn-side-label">A · {issue.sides.labelA}</span>
+                          <p>{issue.sides.a}</p>
+                        </div>
+                        <span className="cn-vs" aria-hidden="true">
+                          VS
+                        </span>
+                        <div className="cn-side cn-side-b">
+                          <span className="cn-side-label">B · {issue.sides.labelB}</span>
+                          <p>{issue.sides.b}</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="cn-side-empty">
+                        <p>이 카드는 AI 요약이 없어 양쪽 입장 정리가 없어요.</p>
+                        <a className="cn-link" href={issue.url} target="_blank" rel="noreferrer noopener">
+                          원문에서 확인하기 <ArrowUpRight size={13} />
+                        </a>
+                      </div>
+                    )}
+                    <p className="cn-slide-foot-note">넘겨서 바로 투표하고 토론해 보세요 →</p>
+                  </section>
+
+                  {/* ⑤ 한 줄 팩폭 · 질문 */}
+                  <section className="slide cn-question" data-testid="slide-5" aria-hidden={index !== 4}>
+                    <p className="cn-eyebrow">04 · 당신은?</p>
+                    <h3 className="cn-question-hook">{issue.point || issue.poll.question}</h3>
+                    <p className="cn-poll-q">{poll.question || issue.poll.question}</p>
+                    <div className="cn-options">
+                      {(["a", "b"] as const).map((key) => (
+                        <span key={key} className="cn-option" data-mine={poll.my === key}>
+                          <b>{key.toUpperCase()}</b>
+                          {key === "a" ? labelA : labelB}
+                        </span>
+                      ))}
+                    </div>
+                    <p className="cn-call">댓글로 A 아니면 B, 이유도 한 줄 남겨 주세요</p>
+                    <p className="cn-slide-foot-note">{issue.source} · 원문은 카드 링크에서</p>
+                  </section>
+                </div>
+              </div>
+            </div>
+
+            <div className="cn-nav">
+              <button type="button" onClick={() => go(-1)} disabled={index === 0} aria-label="이전 카드" data-testid="prev">
+                <ChevronLeft size={20} />
+              </button>
+              <div className="cn-dots">
+                {Array.from({ length: SLIDE_COUNT }).map((_, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="cn-dot"
+                    data-on={i === index}
+                    aria-label={`${i + 1}장으로 이동`}
+                    aria-current={i === index}
+                    onClick={() => jump(i)}
+                  />
+                ))}
+              </div>
+              {index < SLIDE_COUNT - 1 ? (
+                <button type="button" onClick={() => go(1)} aria-label="다음 카드" data-testid="next">
+                  <ChevronRight size={20} />
+                </button>
+              ) : (
+                <button type="button" onClick={onClose} aria-label="닫기" className="cn-done">
+                  닫기
+                </button>
+              )}
+            </div>
+
+            <div className="cn-actions">
+              <button type="button" className="cn-action" onClick={() => void saveCurrent()} disabled={saving !== null} data-testid="save-png">
+                <Download size={15} /> {saving === "one" ? "만드는 중…" : "이 장 PNG"}
+              </button>
+              <button type="button" className="cn-action" onClick={() => void saveAll()} disabled={saving !== null} data-testid="save-all">
+                <FileArchive size={15} /> {saving === "all" ? "만드는 중…" : "5장 한 번에"}
+              </button>
+              <button
+                type="button"
+                className="cn-action"
+                onClick={() => setCaptionOpen((open) => !open)}
+                aria-expanded={captionOpen}
+                data-testid="open-caption"
+              >
+                <Clipboard size={15} /> 인스타 캡션
+              </button>
+              <button type="button" className="cn-action is-ghost" onClick={onCopy} data-testid="copy-link">
+                <Link2 size={15} /> 링크
+              </button>
+            </div>
+
+            {captionOpen && (
+              <div className="cn-caption" data-testid="caption-panel">
+                <div className="cn-caption-head">
+                  <b>인스타 캡션 + 해시태그</b>
+                  <button type="button" onClick={() => onCopyCaption(caption)} data-testid="copy-caption">
+                    <Clipboard size={14} /> 복사
+                  </button>
+                </div>
+                <textarea readOnly value={caption} data-testid="caption-text" aria-label="인스타 캡션" />
+                <p className="cn-caption-help">
+                  인스타 앱 → 새 게시물 → 저장한 5장 선택 → 캡션 붙여넣기. 이미지는 '이 장 PNG' 또는 '5장 한 번에'로 받으세요.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <Discussion
+            issue={issue}
+            poll={poll}
+            voting={voting}
+            localOnly={localOnly}
+            onVote={onVote}
+            onComment={onComment}
+            onLike={onLike}
+          />
+        </div>
+      </div>
     </div>
   );
 }
