@@ -547,12 +547,17 @@ function handleFakeGemini(req, res, body) {
 
 /* ---------------------------------------------------------- API wiring */
 
-const handlers = { trending: null, briefing: null, poll: null };
+const handlers = { trending: null, briefing: null, poll: null, img: null };
 
 async function loadHandlers() {
   await mkdir(TMP, { recursive: true });
   await build({
-    entryPoints: [join(ROOT, 'api/trending.ts'), join(ROOT, 'api/briefing.ts'), join(ROOT, 'api/poll.ts')],
+    entryPoints: [
+      join(ROOT, 'api/trending.ts'),
+      join(ROOT, 'api/briefing.ts'),
+      join(ROOT, 'api/poll.ts'),
+      join(ROOT, 'api/img.ts'),
+    ],
     outdir: TMP,
     bundle: true,
     format: 'esm',
@@ -564,6 +569,7 @@ async function loadHandlers() {
   handlers.trending = (await import(pathToFileURL(join(TMP, 'trending.js')).href + stamp)).default;
   handlers.briefing = (await import(pathToFileURL(join(TMP, 'briefing.js')).href + stamp)).default;
   handlers.poll = (await import(pathToFileURL(join(TMP, 'poll.js')).href + stamp)).default;
+  handlers.img = (await import(pathToFileURL(join(TMP, 'img.js')).href + stamp)).default;
 }
 
 function createResponse(nodeRes) {

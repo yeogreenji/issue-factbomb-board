@@ -194,520 +194,73 @@
   pointer-events: none;
 }
 
-/* ① 표지 */
+/* ①~⑤ 슬라이드 — 화면에 보이는 그림이 곧 저장되는 PNG(캔버스 결과)입니다. */
 
-.cn-card .cn-cover {
-  background:
-    radial-gradient(130% 80% at 104% -6%, color-mix(in srgb, var(--accent, #d9ff3d) 46%, transparent) 0%, transparent 62%),
-    radial-gradient(90% 60% at 0% 104%, rgba(255, 77, 28, 0.22) 0%, transparent 60%),
-    #0b0b0c;
-  color: #fffdf8;
-  justify-content: space-between;
-  gap: 4cqw;
-}
-
-.cn-cover-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 3cqw;
+.cn-card .slide {
+  flex: 0 0 100%;
+  height: 100%;
   position: relative;
-  z-index: 1;
-}
-
-.cn-chip {
-  display: inline-flex;
-  align-items: center;
-  height: 7.4cqw;
-  padding: 0 3.4cqw;
-  border-radius: 99px;
-  border: 1px solid color-mix(in srgb, var(--accent, #d9ff3d) 60%, transparent);
-  color: var(--accent, #d9ff3d);
-  font-size: 3cqw;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  background: rgba(0, 0, 0, 0.3);
-}
-
-.cn-temp .temp {
-  color: #fffdf8;
-}
-
-.cn-temp .temp-track {
-  display: none;
-}
-
-.cn-temp .temp-num {
-  font-size: 5.4cqw;
-}
-
-.cn-cover-text {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 3.4cqw;
-  margin: auto 0;
-}
-
-.cn-cover-eyebrow {
-  font-family: var(--font-mono);
-  font-size: 2.4cqw;
-  font-weight: 700;
-  letter-spacing: 0.24em;
-  color: rgba(255, 253, 248, 0.5);
-}
-
-.cn-hook {
-  margin: 0;
-  font-weight: 900;
-  font-size: 9.6cqw;
-  line-height: 1.1;
-  letter-spacing: -0.055em;
-  text-wrap: balance;
-  word-break: keep-all;
-  display: -webkit-box;
-  -webkit-line-clamp: 6;
-  -webkit-box-orient: vertical;
   overflow: hidden;
-}
-
-.cn-kicker {
-  margin: 0;
-  font-size: 3.7cqw;
-  line-height: 1.45;
-  color: rgba(255, 253, 248, 0.72);
-  word-break: keep-all;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.cn-cover-foot {
-  margin: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 3cqw;
-  padding-top: 3cqw;
-  border-top: 1px solid rgba(255, 253, 248, 0.2);
-  font-size: 2.8cqw;
-  font-weight: 700;
-  color: rgba(255, 253, 248, 0.6);
-  position: relative;
-  z-index: 1;
-}
-
-.cn-cover-swipe {
-  color: var(--lime);
-  font-weight: 800;
-}
-
-/* ② 팩트 — 아이보리 */
-
-.cn-card .cn-facts {
-  background: #f2f0ea;
-  color: #0b0b0c;
-  gap: 4.4cqw;
-}
-
-.cn-eyebrow {
-  margin: 0;
-  font-size: 2.9cqw;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  color: #0b0b0c;
-  display: flex;
-  align-items: center;
-  gap: 2.2cqw;
-}
-
-.cn-eyebrow::before {
-  content: "";
-  width: 2.2cqw;
-  height: 2.2cqw;
-  border-radius: 50%;
-  background: #0b0b0c;
-}
-
-.cn-facts .cn-eyebrow::before,
-.cn-issue .cn-eyebrow::before {
-  background: var(--lime);
-}
-
-.cn-fact-list {
-  list-style: none;
-  margin: 0;
+  background: #08080a;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 5cqw;
-  flex: 1;
-  justify-content: center;
-}
-
-.cn-fact-list li {
-  display: flex;
-  gap: 3.2cqw;
-  align-items: flex-start;
-}
-
-.cn-fact-num {
-  flex-shrink: 0;
-  width: 8cqw;
-  height: 8cqw;
-  border-radius: 2cqw;
-  background: #0b0b0c;
-  color: #f2f0ea;
-  font-size: 4.2cqw;
-  font-weight: 900;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
-}
-
-.cn-fact-text {
-  font-size: 4.5cqw;
-  font-weight: 700;
-  line-height: 1.42;
-  letter-spacing: -0.04em;
-  color: #14120f;
-  word-break: keep-all;
-  padding-top: 0.6cqw;
-}
-
-.cn-fact-foot {
-  display: flex;
-  flex-direction: column;
-  gap: 1.4cqw;
-  border-top: 1px solid rgba(11, 11, 12, 0.14);
-  padding-top: 3cqw;
-}
-
-.cn-tags {
-  margin: 0;
-  display: flex;
-  gap: 2.4cqw;
-  font-size: 2.7cqw;
-  font-weight: 800;
-  color: #0b0b0c;
-}
-
-.cn-origin {
-  margin: 0;
-  font-size: 2.5cqw;
-  color: rgba(11, 11, 12, 0.5);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.cn-note {
-  margin: 0;
-  font-size: 2.4cqw;
-  color: rgba(11, 11, 12, 0.45);
-  line-height: 1.4;
-}
-
-.cn-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 2.7cqw;
-  font-weight: 800;
-  color: #0b0b0c;
-  text-decoration: none;
-  border-bottom: 1px solid #0b0b0c;
-  align-self: flex-start;
-}
-
-/* ③ 배경·쟁점 */
-
-.cn-card .cn-issue {
-  background:
-    radial-gradient(100% 60% at 100% 100%, color-mix(in srgb, var(--accent, #d9ff3d) 26%, transparent), transparent 62%),
-    #0b0b0c;
-  color: #fffdf8;
-  gap: 4.6cqw;
-}
-
-.cn-issue .cn-eyebrow {
-  color: #fffdf8;
-}
-
-.cn-issue-main {
-  display: flex;
-  flex-direction: column;
-  gap: 4.6cqw;
-  flex: 1;
-  justify-content: center;
-}
-
-.cn-background {
-  margin: 0;
-  font-size: 3.9cqw;
-  line-height: 1.62;
-  color: rgba(255, 253, 248, 0.8);
-  word-break: keep-all;
-  display: -webkit-box;
-  -webkit-line-clamp: 9;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.cn-point {
-  background: var(--lime);
-  color: #0b0b0c;
-  border-radius: 3.4cqw;
-  padding: 4.4cqw;
-  display: flex;
-  flex-direction: column;
-  gap: 2cqw;
-}
-
-.cn-point span {
-  font-size: 2.7cqw;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-}
-
-.cn-point p {
-  margin: 0;
-  font-weight: 900;
-  font-size: 4.9cqw;
-  line-height: 1.28;
-  letter-spacing: -0.045em;
-  word-break: keep-all;
-}
-
-.cn-slide-foot-note {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: 2.5cqw;
-  letter-spacing: 0.04em;
-  color: rgba(255, 253, 248, 0.45);
-}
-
-.cn-issue .cn-slide-foot-note {
-  margin-top: auto;
-}
-
-/* ④ A vs B */
-
-.cn-card .cn-sides {
-  background: #0b0b0c;
-  gap: 4cqw;
-}
-
-.cn-side-stack {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2.4cqw;
-  min-height: 0;
-}
-
-.cn-side {
-  flex: 1;
-  border-radius: 3.4cqw;
-  padding: 4.2cqw;
-  display: flex;
-  flex-direction: column;
-  gap: 2.2cqw;
-  justify-content: center;
-  min-height: 0;
-  color: #0b0b0c;
-}
-
-.cn-side-a {
-  background: var(--lime);
-}
-
-.cn-side-b {
-  background: #ff6a3d;
-}
-
-.cn-side-label {
-  font-family: var(--font-mono);
-  font-size: 2.8cqw;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  opacity: 0.72;
-}
-
-.cn-side p {
-  margin: 0;
-  font-size: 4.4cqw;
-  font-weight: 800;
-  line-height: 1.34;
-  letter-spacing: -0.045em;
-  word-break: keep-all;
-  display: -webkit-box;
-  -webkit-line-clamp: 5;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.cn-vs {
-  align-self: center;
-  width: 12cqw;
-  height: 7.4cqw;
-  border-radius: 99px;
-  background: #0b0b0c;
-  color: #fffdf8;
-  font-family: var(--font-mono);
-  font-size: 3cqw;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: -1.4cqw 0;
-  z-index: 1;
-  border: 1px solid rgba(255, 253, 248, 0.25);
-}
-
-.cn-sides .cn-eyebrow {
-  color: #fffdf8;
-}
-
-.cn-side-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 3cqw;
-  justify-content: center;
-  color: rgba(255, 253, 248, 0.72);
-  font-size: 3.8cqw;
-  line-height: 1.6;
-}
-
-.cn-side-empty p {
   margin: 0;
 }
 
-.cn-side-empty .cn-link {
-  color: var(--lime);
-  border-color: var(--lime);
-}
-
-/* ⑤ 투표 — 라임 포스터 */
-
-.cn-card .cn-question {
-  background: var(--lime);
-  color: #0b0b0c;
-  gap: 3.2cqw;
-}
-
-.cn-question .cn-eyebrow {
-  color: #0b0b0c;
-}
-
-.cn-vote-ghost {
-  position: absolute;
-  right: -6cqw;
-  bottom: -8cqw;
-  font-weight: 900;
-  font-size: 58cqw;
-  line-height: 1;
-  letter-spacing: -0.1em;
-  color: rgba(11, 11, 12, 0.06);
+.cn-slide-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
   pointer-events: none;
-  z-index: 0;
 }
 
-.cn-question > *:not(.cn-vote-ghost) {
-  position: relative;
-  z-index: 1;
-}
-
-.cn-question .cn-eyebrow::before {
-  background: #0b0b0c;
-}
-
-.cn-question-hook {
-  margin: 0;
-  font-weight: 900;
-  font-size: 8cqw;
-  line-height: 1.08;
-  letter-spacing: -0.06em;
-  word-break: keep-all;
-  text-wrap: balance;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.cn-poll-q {
-  margin: 0;
-  font-size: 4cqw;
-  font-weight: 700;
-  line-height: 1.4;
-  color: rgba(11, 11, 12, 0.78);
-  word-break: keep-all;
-}
-
-.cn-options {
+.cn-slide-loading {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  gap: 2.2cqw;
-  margin-top: 7cqw;
-}
-
-.cn-option {
-  display: flex;
-  align-items: center;
-  gap: 2.8cqw;
-  border: 1.6px solid #0b0b0c;
-  border-radius: 2.6cqw;
-  padding: 2.8cqw 3.2cqw;
-  font-size: 3.7cqw;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-  background: transparent;
-  color: #0b0b0c;
-}
-
-.cn-option b {
-  width: 6.4cqw;
-  height: 6.4cqw;
-  border-radius: 1.6cqw;
-  background: #0b0b0c;
-  color: var(--lime);
-  display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 10px;
+  background:
+    radial-gradient(120% 70% at 100% 0%, color-mix(in srgb, var(--accent, #d9ff3d) 26%, transparent), transparent 62%),
+    #0d0d10;
+}
+
+.cn-slide-shimmer {
+  width: 62%;
+  height: 34%;
+  border-radius: 12px;
+  background: linear-gradient(100deg, rgba(255, 255, 255, 0.04) 20%, rgba(255, 255, 255, 0.13) 40%, rgba(255, 255, 255, 0.04) 60%);
+  background-size: 220% 100%;
+  animation: cn-shimmer 1.4s linear infinite;
+}
+
+@keyframes cn-shimmer {
+  from {
+    background-position: 140% 0;
+  }
+  to {
+    background-position: -60% 0;
+  }
+}
+
+.cn-slide-note {
   font-family: var(--font-mono);
-  font-size: 3cqw;
-  font-weight: 700;
-  flex-shrink: 0;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
 }
 
-.cn-option[data-mine="true"] {
-  background: #0b0b0c;
-  color: var(--lime);
-}
-
-.cn-option[data-mine="true"] b {
-  background: var(--lime);
-  color: #0b0b0c;
-}
-
-.cn-call {
+.cn-hint {
   margin: 0;
-  margin-top: auto;
-  padding-top: 4cqw;
-  font-size: 3cqw;
-  font-weight: 800;
-  color: rgba(11, 11, 12, 0.62);
-  word-break: keep-all;
-}
-
-.cn-question .cn-slide-foot-note {
-  color: rgba(11, 11, 12, 0.55);
+  padding: 0 2px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+  color: var(--faint);
 }
 
 /* ---------------------------------------------------------------- nav */

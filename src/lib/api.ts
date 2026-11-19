@@ -12,6 +12,17 @@ import type {
 /** GitHub Pages 같은 정적 빌드에서는 서버가 없습니다(vite define). */
 export const STATIC_BUILD = typeof __FACTBOMB_STATIC__ !== "undefined" && __FACTBOMB_STATIC__;
 
+/**
+ * 기사 사진을 카드뉴스 캔버스에 그릴 때 쓰는 같은 출처 통로(api/img).
+ * 언론사 이미지가 CORS를 막아도 캔버스가 오염되지 않아 PNG로 저장할 수 있습니다.
+ * 정적 빌드에는 서버가 없으니 원본 주소를 그대로 씁니다.
+ */
+export function proxiedImage(src: string): string {
+  if (!src) return src;
+  if (STATIC_BUILD || !/^https?:\/\//i.test(src)) return src;
+  return `/api/img?u=${encodeURIComponent(src)}`;
+}
+
 const VOTER_KEY = "issue-thermo.voter.v1";
 const LOCAL_KEY = "issue-thermo.local.v2";
 

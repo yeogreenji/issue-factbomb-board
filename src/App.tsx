@@ -96,7 +96,9 @@ export default function App() {
     const list = [...(doc?.issues ?? []), ...extra];
     const seen = new Set<string>();
     const unique = list.filter((issue) => (seen.has(issue.id) ? false : (seen.add(issue.id), true)));
-    return unique.sort((a, b) => (b.temp ?? -1) - (a.temp ?? -1) || b.publishedAt - a.publishedAt);
+    // 화제성(제목·키워드)과 논란 온도를 섞어 정렬 — 인스타에 올렸을 때 반응이 붙는 카드가 위로.
+    const rank = (issue: Issue) => (issue.buzz ?? 0) * 0.6 + (issue.temp ?? issue.buzz ?? 0) * 0.4;
+    return unique.sort((a, b) => rank(b) - rank(a) || b.publishedAt - a.publishedAt);
   }, [doc, extra]);
 
   const viewerIssue = useMemo(() => issues.find((issue) => issue.id === viewerId) ?? null, [issues, viewerId]);
@@ -247,6 +249,9 @@ export default function App() {
 
   const feed = issues.slice(1);
   const hero = issues[0];
+  // 하루에 3~4장 올리는 흐름 — 오늘 올릴 만한 카드를 위에서부터 표시합니다.
+  const recommendedIds = new Set(issues.slice(0, 4).map((issue) => issue.id));
+  const feedTotal = (doc?.feeds ?? []).length || 19;
 
   return (
     <div className="app">
@@ -298,7 +303,7 @@ export default function App() {
                 갈렸나<span className="masthead-dot">.</span>
               </h2>
               <p className="masthead-sub">
-                언론사 13곳의 실제 기사만 모아 카드뉴스 5장으로. 읽고, 고르고, 댓글로 붙습니다.
+                언론사 {feedTotal}곳의 실제 기사만 모아 인스타 카드뉴스 5장으로. 오늘 올릴 3~4장을 화제성 순으로 골라 놓았어요.
               </p>
             </section>
 
@@ -318,7 +323,7 @@ export default function App() {
                 <h2>
                   오늘의 카드뉴스 <em>{feed.length}</em>
                 </h2>
-                <span className="section-note">온도 높은 순</span>
+                <span className="section-note">화제성 순 · 위 4장은 오늘 올릴 만한 카드</span>
               </div>
               <div className="grid">
                 {feed.map((issue, index) => (
@@ -327,6 +332,7 @@ export default function App() {
                     issue={issue}
                     index={index + 1}
                     poll={polls[issue.id] ?? null}
+                    recommended={recommendedIds.has(issue.id)}
                     onOpen={openIssue}
                   />
                 ))}
@@ -340,11 +346,11 @@ export default function App() {
               <ol>
                 <li>
                   <b>01</b>
-                  <span>언론사 RSS 13곳에서 오늘 기사를 긁어옵니다</span>
+                  <span>언론사 RSS {feedTotal}곳에서 오늘 기사를 긁어옵니다 — 연예·사건·소비자 논란까지</span>
                 </li>
                 <li>
                   <b>02</b>
-                  <span>AI가 표지 훅·팩트 3줄·쟁점·A vs B로 카드 5장을 만듭니다</span>
+                  <span>화제성으로 줄 세우고, AI가 표지 훅·팩트 3줄·쟁점·A vs B로 카드 5장을 만듭니다</span>
                 </li>
                 <li>
                   <b>03</b>

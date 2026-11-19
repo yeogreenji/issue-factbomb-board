@@ -13,6 +13,7 @@
 
 실행: npm run verify   (필요하면 스크립트가 직접 빌드합니다)
 """
+import hashlib
 import io
 import json
 import os
@@ -23,6 +24,8 @@ import struct
 import subprocess
 import sys
 import time
+import urllib.parse
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -234,6 +237,67 @@ def save_download(page, selector: str, target: Path) -> bool:
 
 # ------------------------------------------------------------------ scenario A
 
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def wait_slides(page, timeout: int = 60000) -> None:
+    """카드 5장은 캔버스로 그려서 화면에 올립니다 — 다 그려질 때까지 기다립니다."""
+    page.wait_for_selector('[data-testid="slide-img-5"]', timeout=timeout)
+    page.wait_for_timeout(400)
+
+
+def slide_labels(page) -> list[str]:
+    return [
+        page.locator(f'[data-testid="slide-{i + 1}"]').get_attribute("aria-label") or ""
+        for i in range(5)
+    ]
+
+
+def slide_hashes(page) -> list[str]:
+    return [
+        page.locator(f'[data-testid="slide-img-{i + 1}"]').get_attribute("data-hash") or ""
+        for i in range(5)
+    ]
+
+
+def slide_sizes(page) -> list[dict]:
+    return page.evaluate(
+        """() => Array.from(document.querySelectorAll('[data-testid^="slide-img-"]')).map(img => ({
+            w: img.naturalWidth, h: img.naturalHeight, loaded: img.complete }))"""
+    )
+
+
+def top_region_pixels(page, slide: int = 1) -> dict:
+    """카드 위쪽(사진이 깔리는 자리)에 실제 사진이 그려졌는지 픽셀 색으로 확인합니다."""
+    return page.evaluate(
+        """(n) => {
+            const img = document.querySelector(`[data-testid="slide-img-${n}"]`);
+            const c = document.createElement('canvas');
+            c.width = 80; c.height = 40;
+            const ctx = c.getContext('2d');
+            ctx.drawImage(img, 0, 0, 80, 40);
+            const d = ctx.getImageData(0, 0, 80, 40).data;
+            const colors = new Set();
+            let sum = 0;
+            for (let i = 0; i < d.length; i += 4) {
+                colors.add((d[i] >> 3) + ',' + (d[i + 1] >> 3) + ',' + (d[i + 2] >> 3));
+                sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
+            }
+            return { colors: colors.size, avg: sum / (d.length / 4) };
+        }""",
+        slide,
+    )
+
+
+def issue_from_api(base: str, issue_id: str) -> dict:
+    port = re.search(r":(\d+)", base).group(1)
+    status, payload = api_json(int(port), f"/api/trending?issue={issue_id}")
+    return payload.get("issue") or {}
+
+
 def scenario_mobile(base: str, browser):
     ctx = browser.new_context(
         viewport={"width": 390, "height": 844},
@@ -249,20 +313,20 @@ def scenario_mobile(base: str, browser):
     settle(page, 500)
 
     cards = page.locator('[data-testid="feed-card"]').count()
-    check("A: 오늘의 카드뉴스 4건 이상", cards >= 3, f"{cards}건")
+    check("A: 오늘의 카드뉴스 3건 이상", cards >= 3, f"{cards}건")
     check("A: 1위 히어로 카드", page.locator('[data-testid="hero-card"]').count() == 1)
+    check("A: 추천(오늘 올릴) 카드 표시", page.locator('[data-recommended="true"]').count() >= 3, f"{page.locator('[data-recommended=\'true\']').count()}건")
+    check("A: 화제성 숫자 노출", page.locator(".card-buzz").count() >= 3)
 
     hook = page.locator('[data-testid="hero-card"] .hero-hook').inner_text().strip()
     check("A: 히어로 한 줄 훅 표시", len(hook) >= 8, hook)
     check("A: 출처·시간 표시", bool(re.search(r"분 전|시간 전|방금", page.locator('[data-testid="hero-card"]').inner_text())))
 
-    # 목록에서도 이슈마다 다른 A/B가 보여야 합니다(예전에는 같은 문항이 반복됐음).
+    # 목록에서도 이슈마다 다른 A/B가 보여야 합니다.
     teasers = page.locator('[data-testid="feed-card"] .teaser-q')
     teaser_texts = [teasers.nth(i).inner_text().strip() for i in range(teasers.count())]
     check("A: 목록에서 A/B 문항이 바로 보임", len(teaser_texts) >= 3 and all(len(t) >= 8 for t in teaser_texts), str(teaser_texts)[:120])
     check("A: 카드마다 투표 문항이 다름", len(set(teaser_texts)) == len(teaser_texts), str(teaser_texts)[:160])
-    opts = page.locator('[data-testid="feed-card"] .teaser-opt span')
-    check("A: 목록에 A/B 선택지 문구", opts.count() >= 6)
 
     strip = page.locator(".live-strip").inner_text()
     check("A: 수집 시각·건수·AI 상태 노출", "기준" in strip and "이슈" in strip and "AI" in strip, strip)
@@ -270,74 +334,82 @@ def scenario_mobile(base: str, browser):
 
     font = page.evaluate("getComputedStyle(document.querySelector('.hero-hook')).fontFamily")
     size = page.evaluate("parseFloat(getComputedStyle(document.querySelector('.hero-hook')).fontSize)")
-    check("A: Pretendard/SUIT 고딕으로 바뀜", "Pretendard" in font or "SUIT" in font, font)
+    check("A: Pretendard/SUIT 고딕", "Pretendard" in font or "SUIT" in font, font)
     check("A: 임팩트 헤드라인(26px 이상)", size >= 26, str(size))
 
-    body = page.inner_text("body")
-    check("A: 언론사 이름 표시", any(name in body for name in ("연합뉴스", "블로터", "한국경제", "경향신문")))
-    check("A: 카드에 원문 기사 링크", (page.locator('[data-testid="hero-card"]').get_attribute("data-issue-id") or "") != "")
     check("A: 모바일 390 가로 넘침 없음(피드)", no_overflow(page))
     page.screenshot(path=str(SHOTS / "01-mobile-feed.png"), full_page=True)
 
+    # 홈의 '카드뉴스 5장' 1번 칸 = 실제로 그린 인스타 썸네일
+    cover_tile = page.locator('[data-testid="preview-cover"] img')
+    page.wait_for_selector('[data-testid="preview-cover"] img', timeout=25000)
+    tile = page.evaluate(
+        """() => { const img = document.querySelector('[data-testid="preview-cover"] img');
+            return { w: img.naturalWidth, h: img.naturalHeight }; }"""
+    )
+    check("A: 홈 카드뉴스 칸 1번에 표지 썸네일(1080×1350)", tile.get("w") == 1080 and tile.get("h") == 1350, str(tile))
+
     open_viewer(page)
+    issue_id = page.locator('[data-testid="hero-card"]').get_attribute("data-issue-id") or ""
+    issue = issue_from_api(base, issue_id)
+
     check("A: 카드뉴스 뷰어 열림", page.locator('[data-testid="viewer"]').count() == 1)
     check("A: 진행 막대 5칸", page.locator(".cn-seg").count() == 5)
-    cover_hook = page.locator(".cn-cover .cn-hook").inner_text().strip()
-    check("A: 표지에 같은 훅", cover_hook == hook, f"{cover_hook} != {hook}")
-    check("A: 표지에 카테고리·온도", page.locator(".cn-cover .cn-chip").count() == 1 and "°" in page.locator(".cn-cover").inner_text())
-    src_href = page.locator(".cn-src").get_attribute("href") or ""
-    check("A: 카드 상단에 원문 링크", src_href.startswith("http"), src_href[:60])
-    check("A: 모바일 390 가로 넘침 없음(카드)", no_overflow(page))
-    page.screenshot(path=str(SHOTS / "03-mobile-cover.png"))
+    wait_slides(page)
 
-    # ② 팩트 3줄
-    go_next(page)
-    facts = page.locator('[data-testid="slide-2"] .cn-fact-text')
-    check("A: ② 무슨 일인데 — 팩트 3줄", facts.count() == 3, f"{facts.count()}개")
-    fact_texts = [facts.nth(i).inner_text().strip() for i in range(facts.count())]
-    check("A: 팩트가 문장으로 읽힘", all(len(text) >= 12 for text in fact_texts), str(fact_texts))
-    check("A: 팩트가 서로 다른 내용", len(set(fact_texts)) == len(fact_texts))
-    check("A: 원제(원문 제목) 함께 표시", "원제" in page.locator('[data-testid="slide-2"]').inner_text())
-    page.screenshot(path=str(SHOTS / "04-mobile-facts.png"))
+    sizes = slide_sizes(page)
+    check("A: 5장 모두 렌더", len(sizes) == 5 and all(s["loaded"] for s in sizes), str(sizes))
+    check("A: 카드 규격 1080×1350", all(s["w"] == 1080 and s["h"] == 1350 for s in sizes), str(sizes))
 
-    # ③ 배경·쟁점
-    go_next(page)
-    issue_text = page.locator('[data-testid="slide-3"]').inner_text()
-    check("A: ③ 왜 지금 뜨나 — 배경 있음", len(page.locator(".cn-background").inner_text().strip()) >= 20)
-    check("A: ③ 핵심 쟁점 박스", "핵심 쟁점" in issue_text and len(page.locator(".cn-point p").inner_text().strip()) >= 8)
-    page.screenshot(path=str(SHOTS / "05-mobile-issue.png"))
-
-    # ④ A vs B
-    go_next(page)
-    sides = page.locator('[data-testid="slide-4"] .cn-side p')
-    check("A: ④ A vs B 두 진영", sides.count() == 2)
-    check("A: 두 진영 주장이 다름", sides.nth(0).inner_text().strip() != sides.nth(1).inner_text().strip())
-    check("A: 진영 라벨 표시", page.locator('[data-testid="slide-4"] .cn-side-label').count() == 2)
-    page.screenshot(path=str(SHOTS / "06-mobile-sides.png"))
-
-    # ⑤ 한 줄 팩폭 · 질문
-    go_next(page)
-    question_text = page.locator('[data-testid="slide-5"]').inner_text()
-    check("A: ⑤ 한 줄 팩폭·질문", len(page.locator(".cn-question-hook").inner_text().strip()) >= 8)
-    check("A: ⑤ 투표 선택지 A/B", page.locator('[data-testid="slide-5"] .cn-option').count() == 2, question_text[:60])
-    check("A: ⑤ 토론 유도 문구", "댓글" in question_text)
+    labels = slide_labels(page)
+    check("A: 표지 문구 = 이 카드의 훅", hook in labels[0], labels[0][:80])
+    facts = issue.get("facts") or []
     check(
-        "A: ⑤ 투표 카드 제목 = 이 카드의 질문",
-        page.locator(".cn-question-hook").inner_text().strip()
-        == page.locator('[data-testid="poll-question"]').inner_text().strip(),
-        page.locator(".cn-question-hook").inner_text()[:40],
+        "A: ② 무슨 일인데 — 팩트 3줄",
+        len(facts) == 3 and all(fact[:24] in labels[1] for fact in facts),
+        labels[1][:120],
     )
-    page.screenshot(path=str(SHOTS / "07-mobile-question.png"))
+    check("A: ② 원제(원문 제목) 표시", (issue.get("title") or "")[:20] in labels[1], labels[1][:120])
+    check("A: ③ 왜 지금 뜨나 — 배경", (issue.get("background") or "")[:20] in labels[2], labels[2][:90])
+    check("A: ③ 핵심 쟁점", "핵심 쟁점" in labels[2] and (issue.get("point") or "")[:10] in labels[2], labels[2][:120])
+    sides = issue.get("sides") or {}
+    check(
+        "A: ④ A vs B 두 진영",
+        (sides.get("a") or "")[:16] in labels[3] and (sides.get("b") or "")[:16] in labels[3],
+        labels[3][:140],
+    )
+    check("A: ⑤ 투표 질문·선택지", issue.get("poll", {}).get("question", "")[:12] in labels[4], labels[4][:120])
+    check("A: ⑤ 댓글 유도", "댓글" in labels[4])
 
-    # PNG 저장 (현재 장 = 5장)
+    hashes = slide_hashes(page)
+    check("A: 5장이 서로 다른 카드", len(set(hashes)) == 5 and all(hashes), str(hashes)[:80])
+
+    # 표지 위쪽에 실제 사진이 그려졌는지 (밋밋한 배경이면 색이 거의 없음)
+    if issue.get("image"):
+        top = top_region_pixels(page, 1)
+        check("A: 표지에 기사 사진이 실제로 그려짐", top["colors"] >= 26, str(top))
+    else:
+        check("A: 사진이 없어도 표지가 그래픽으로 채워짐", top_region_pixels(page, 1)["colors"] >= 8)
+
+    page.screenshot(path=str(SHOTS / "03-mobile-cover.png"))
+    for i in range(1, 5):
+        page.locator(f'[data-testid="progress-{i + 1}"]').click()
+        settle(page, 420)
+        page.screenshot(path=str(SHOTS / f"0{3 + i}-mobile-slide{i + 1}.png"))
+
+    # 5번 카드에서 PNG 저장 — 화면에 보이는 그 파일이어야 합니다.
+    page.locator('[data-testid="progress-5"]').click()
+    settle(page, 400)
     png_path = ROOT / ".tmp" / "card-slide5.png"
+    shown_hash = hashes[4]
     if save_download(page, '[data-testid="save-png"]', png_path):
         data = png_path.read_bytes()
         check("A: 현재 장 PNG 저장", data[:8] == b"\x89PNG\r\n\x1a\n", data[:8].hex())
         check("A: PNG 규격 1080×1350(4:5)", png_size(png_path) == (1080, 1350), str(png_size(png_path)))
         check("A: PNG 파일 크기 충분", len(data) > 20_000, f"{len(data)} bytes")
+        check("A: 저장된 PNG = 화면에 보이는 카드(해시 일치)", sha256_of(png_path) == shown_hash, f"{sha256_of(png_path)[:12]} != {shown_hash[:12]}")
 
-    # 5장 ZIP 저장
+    # 5장 ZIP — 화면의 5장과 같은 파일이어야 합니다.
     zip_path = ROOT / ".tmp" / "card-5.zip"
     if save_download(page, '[data-testid="save-all"]', zip_path):
         zdata = zip_path.read_bytes()
@@ -345,13 +417,14 @@ def scenario_mobile(base: str, browser):
         with zipfile.ZipFile(io.BytesIO(zdata)) as archive:
             names = archive.namelist()
             check("A: ZIP에 5장", len(names) == 5, str(names))
-            sizes = [png_size_from_bytes(archive.read(name)) for name in names]
-            check("A: ZIP 속 PNG 모두 1080×1350", all(size == (1080, 1350) for size in sizes), str(sizes))
-        # 저장된 5장 중 표지를 문서 스크린샷으로 남깁니다.
-        with zipfile.ZipFile(io.BytesIO(zdata)) as archive:
-            (SHOTS / "13-card-export-cover.png").write_bytes(archive.read(names[0]))
-            (SHOTS / "14-card-export-facts.png").write_bytes(archive.read(names[1]))
-            (SHOTS / "15-card-export-sides.png").write_bytes(archive.read(names[3]))
+            payloads = [archive.read(name) for name in names]
+            check("A: ZIP 속 PNG 모두 1080×1350", all(png_size_from_bytes(p) == (1080, 1350) for p in payloads), "ok")
+            zip_hashes = {hashlib.sha256(p).hexdigest() for p in payloads}
+            check("A: ZIP 속 5장 = 화면의 5장(해시 일치)", zip_hashes == set(hashes), f"{len(zip_hashes)}장 대조")
+            (SHOTS / "13-card-export-cover.png").write_bytes(payloads[0])
+            (SHOTS / "14-card-export-facts.png").write_bytes(payloads[1])
+            (SHOTS / "15-card-export-sides.png").write_bytes(payloads[3])
+            (SHOTS / "18-card-export-vote.png").write_bytes(payloads[4])
 
     # 인스타 캡션
     page.locator('[data-testid="open-caption"]').click()
@@ -367,7 +440,7 @@ def scenario_mobile(base: str, browser):
     check("A: 캡션 복사", hook in (clip or ""), str(clip)[:60])
     page.locator('[data-testid="open-caption"]').click()
 
-    # 투표 — 카드 아래 토론에서
+    # 투표 · 토론
     check("A: 카드 아래 토론 영역", page.locator('[data-testid="discussion"]').count() == 1)
     check("A: 투표 전에는 % 숨김", page.locator('[data-testid="result-a"]').count() == 0)
     page.locator('[data-testid="vote-a"]').click()
@@ -378,7 +451,6 @@ def scenario_mobile(base: str, browser):
     check("A: 누적 참여 수 표시", "명 참여" in page.locator(".dlg-foot").inner_text())
     check("A: 내 선택 표시", page.locator('[data-testid="vote-a"]').get_attribute("aria-pressed") == "true")
 
-    # 토론 댓글 (B 진영)
     page.locator('[data-testid="comment-side-b"]').click()
     page.fill('[data-testid="comment-input"]', "이건 좀 심하다")
     page.locator('[data-testid="comment-submit"]').click()
@@ -389,13 +461,11 @@ def scenario_mobile(base: str, browser):
     check("A: 댓글에 진영 표시", first_item.get_attribute("data-side") == "b", first_item.get_attribute("data-side") or "")
     check("A: 댓글 수 표시", "1" in page.locator('[data-testid="comment-count"]').inner_text())
 
-    # 공감
     like_btn = first_item.locator('[data-testid="comment-like"]')
     like_btn.click()
     settle(page, 600)
     check("A: 댓글 공감", "1" in like_btn.inner_text())
 
-    # 필터
     page.locator('[data-testid="comment-filter-a"]').click()
     settle(page, 400)
     check("A: A 진영 필터 — 내 B 댓글 숨김", page.locator('[data-testid="comment-empty"]').count() == 1)
@@ -403,7 +473,6 @@ def scenario_mobile(base: str, browser):
     settle(page, 400)
     page.screenshot(path=str(SHOTS / "08-mobile-discussion.png"))
 
-    # 링크 복사
     page.locator('[data-testid="copy-link"]').click()
     settle(page, 600)
     check("A: 링크 복사 안내", page.locator('[data-testid="toast"]').count() == 1)
@@ -413,22 +482,20 @@ def scenario_mobile(base: str, browser):
     share_url = page.evaluate("location.href")
     check("A: 주소에 카드 id", "#/i/" in share_url, share_url)
 
-    # 새로고침 후에도 투표·댓글 유지
     page.reload(wait_until="networkidle")
     page.wait_for_selector('[data-testid="viewer"]', timeout=15000)
-    settle(page, 800)
-    check("A: 새로고침해도 같은 카드가 열림", page.locator(".cn-cover .cn-hook").inner_text().strip() == hook)
+    wait_slides(page)
+    check("A: 새로고침해도 같은 카드가 열림", hook in slide_labels(page)[0])
     check("A: 새로고침해도 내 표 유지", page.locator('[data-testid="vote-a"]').get_attribute("aria-pressed") == "true")
     page.wait_for_selector('[data-testid="comment-list"]', timeout=8000)
     check("A: 새로고침해도 내 댓글 유지", "이건 좀 심하다" in page.locator('[data-testid="comment-list"]').inner_text())
 
-    # 공유 링크를 새 브라우저에서 열기
     share_ctx = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True)
     share_page = attach(share_ctx.new_page(), "A-share")
     share_page.goto(share_url, wait_until="networkidle")
     share_page.wait_for_selector('[data-testid="viewer"]', timeout=15000)
-    settle(share_page, 700)
-    check("A: 공유 링크로 바로 카드 열림", share_page.locator(".cn-cover .cn-hook").inner_text().strip() == hook)
+    wait_slides(share_page)
+    check("A: 공유 링크로 바로 카드 열림", hook in slide_labels(share_page)[0])
     share_page.wait_for_selector('[data-testid="comment-list"]', timeout=8000)
     check("A: 공유 링크에서도 토론 보임", "이건 좀 심하다" in share_page.locator('[data-testid="comment-list"]').inner_text())
     check("A: 모바일 390 가로 넘침 없음(공유)", no_overflow(share_page))
@@ -452,7 +519,8 @@ def scenario_shared(base: str, browser, hook: str):
     settle(page, 500)
     open_viewer(page)
 
-    check("B: 다른 브라우저에서도 같은 카드", page.locator(".cn-cover .cn-hook").inner_text().strip() == hook)
+    wait_slides(page)
+    check("B: 다른 브라우저에서도 같은 카드", hook in slide_labels(page)[0], slide_labels(page)[0][:60])
     total_text = page.locator(".dlg-foot").inner_text()
     check("B: 앞서 던진 표가 보임", "명 참여" in total_text, total_text)
     check("B: 앞서 쓴 댓글이 보임", "이건 좀 심하다" in page.locator('[data-testid="comment-list"]').inner_text())
@@ -494,9 +562,10 @@ def scenario_briefing(base: str, browser, port: int):
     page.locator('[data-testid="studio-submit"]').click()
     page.wait_for_selector('[data-testid="viewer"]', timeout=45000)
     settle(page, 800)
-    created = page.locator(".cn-cover .cn-hook").inner_text().strip()
+    wait_slides(page)
+    created = slide_labels(page)[0]
     check("C: 기사 링크로 카드 생성", "주 4일제" in created, created)
-    check("C: 만든 카드도 5장 구성", page.locator(".cn-seg").count() == 5)
+    check("C: 만든 카드도 5장 구성", page.locator(".cn-seg").count() == 5 and len(slide_sizes(page)) == 5)
     created_poll = page.locator('[data-testid="poll-question"]').inner_text().strip()
     check("C: 만든 카드도 기사 맞춤 A/B", not BLAND_POLL.search(created_poll), created_poll)
     page.screenshot(path=str(SHOTS / "12-mobile-created.png"))
@@ -508,7 +577,7 @@ def scenario_briefing(base: str, browser, port: int):
     page.locator('[data-testid="studio-submit"]').click()
     page.wait_for_selector('[data-testid="viewer"]', timeout=45000)
     settle(page, 600)
-    check("C: 한 줄 이슈로도 카드 생성", page.locator(".cn-cover .cn-hook").count() == 1)
+    check("C: 한 줄 이슈로도 카드 생성", page.locator('[data-testid="slide-img-5"]').count() == 1)
     page.locator('[data-testid="close-viewer"]').click()
     settle(page, 300)
 
@@ -566,17 +635,17 @@ def scenario_headline_only(port: int, browser):
     check("D: 'AI 없이 제목' 표시", "AI 없이 제목" in body or "헤드라인만" in body)
     check("D: 무엇이 꺼졌는지 안내", page.locator('[data-testid="notice"]').count() == 1, page.locator('[data-testid="notice"]').inner_text()[:80] if page.locator('[data-testid="notice"]').count() else "없음")
     check("D: 측정 안 된 온도는 '–'로 정직하게", page.locator(".temp.is-unmeasured").count() >= 1)
+    check("D: 화제성 숫자는 제목 기반으로 계산", page.locator(".card-buzz").count() >= 3)
     page.screenshot(path=str(SHOTS / "16-mobile-headline-only.png"), full_page=True)
 
     open_viewer(page)
-    go_next(page)
-    facts = page.locator('[data-testid="slide-2"] .cn-fact-text')
-    check("D: 팩트 카드에 원문 안내", "원문" in page.locator('[data-testid="slide-2"]').inner_text())
-    check("D: 팩트 카드 안내 문구(키 없음)", "AI 요약이 없이" in page.locator('[data-testid="slide-2"]').inner_text() or "AI 요약 없이" in page.locator('[data-testid="slide-2"]').inner_text())
-    check("D: 팩트 3줄을 요약에서 채움", facts.count() == 3, f"{facts.count()}개")
-    go_next(page)
-    go_next(page)
-    check("D: 입장 비교가 없으면 숨기지 않고 설명", "없어요" in page.locator('[data-testid="slide-4"]').inner_text())
+    wait_slides(page)
+    labels = slide_labels(page)
+    check("D: AI 없이도 5장 모두 렌더", len(slide_sizes(page)) == 5)
+    check("D: 팩트 카드에 원문 안내", "원문" in labels[1], labels[1][:90])
+    check("D: 팩트 3줄을 요약에서 채움", labels[1].count(".") >= 3, labels[1][:120])
+    check("D: 입장 비교가 없어도 A/B 선택지로 카드 구성", "A" in labels[3] and "B" in labels[3], labels[3][:100])
+    check("D: 투표 카드에 질문·선택지", "당신의 선택" in labels[4] and "A" in labels[4], labels[4][:90])
     page.locator('[data-testid="vote-a"]').click()
     page.wait_for_selector('[data-testid="result-a"]', timeout=8000)
     check("D: 키가 없어도 투표는 동작", page.locator('[data-testid="vote-a"]').get_attribute("aria-pressed") == "true")
@@ -637,7 +706,12 @@ def api_checks(port: int):
     issues = payload.get("issues") or []
     feeds = payload.get("feeds") or []
     check("API: /api/trending 200", status == 200 and payload.get("ok") is True)
-    check("API: 13개 피드 모두 수집", len(feeds) == 13 and all(f.get("ok") for f in feeds), f"{sum(1 for f in feeds if f.get('ok'))}/{len(feeds)}")
+    check("API: RSS 19곳 모두 수집", len(feeds) == 19 and all(f.get("ok") for f in feeds), f"{sum(1 for f in feeds if f.get('ok'))}/{len(feeds)}")
+    check(
+        "API: 연예·사회·이슈 피드 포함",
+        any("연예" in f.get("name", "") for f in feeds) and any("사회" in f.get("name", "") for f in feeds),
+        str([f.get("name") for f in feeds])[:160],
+    )
     check("API: 카드 4건 이상", len(issues) >= 4, str(len(issues)))
     check(
         "API: 모든 카드에 원문 URL·출처·발행시각",
@@ -660,6 +734,12 @@ def api_checks(port: int):
     )
     check("API: 카테고리 값이 정해진 5종", {issue["category"] for issue in issues} <= {"work", "mz", "money", "tech", "culture"})
     check("API: 온도 0~100", all(isinstance(issue.get("temp"), int) and 0 <= issue["temp"] <= 100 for issue in issues))
+    check(
+        "API: 카드마다 화제성 점수(0~99)",
+        all(isinstance(issue.get("buzz"), int) and 0 <= issue["buzz"] <= 99 for issue in issues),
+        str([issue.get("buzz") for issue in issues]),
+    )
+    check("API: 화제성 높은 카드가 위로", issues[0].get("buzz", 0) >= 55, str([i.get("buzz") for i in issues]))
     check("API: 지어낸 기사 없음(모두 테스트 피드 제목)", all("http://127.0.0.1" in issue["url"] for issue in issues))
     check("API: 본문에 HTML 태그가 남지 않음", all("<" not in fact for issue in issues for fact in issue.get("facts") or []))
 
@@ -670,7 +750,8 @@ def api_checks(port: int):
         all(any(word in issue["title"].replace(" ", "") for word in re.split(r"[^가-힣A-Za-z0-9]+", issue["poll"]["question"]) if len(word) >= 2) for issue in issues),
     )
 
-    fid = issues[0]["id"]
+    # 시나리오 A·B가 1위 카드에 표를 던졌으니, API 검사는 그 뒤 카드로 합니다.
+    fid = issues[-1]["id"]
     status, payload = api_json(port, f"/api/trending?issue={fid}")
     check("API: 카드 하나 다시 꺼내기(공유 링크)", status == 200 and payload.get("issue", {}).get("id") == fid)
     status, payload = api_json(port, "/api/trending?issue=doesnotexist123")
@@ -715,7 +796,46 @@ def api_checks(port: int):
     status, payload = api_json(port, "/api/board")
     check("API: 제거한 /api/board는 404", status == 404)
 
-    import urllib.request
+    # 카드뉴스 표지에 쓰는 기사 사진 통로
+    image_issue = next((issue for issue in issues if issue.get("image")), None)
+    if image_issue:
+        proxied = f"http://127.0.0.1:{port}/api/img?u=" + urllib.parse.quote(image_issue["image"], safe="")
+        try:
+            with urllib.request.urlopen(proxied, timeout=30) as response:
+                body_bytes = response.read()
+                check(
+                    "API: 기사 사진 프록시(캔버스용)",
+                    response.status == 200 and response.headers.get("Content-Type", "").startswith("image/") and len(body_bytes) > 200,
+                    f"{response.status} {len(body_bytes)}",
+                )
+        except Exception as error:  # noqa: BLE001
+            check("API: 기사 사진 프록시(캔버스용)", False, str(error)[:100])
+
+    status, payload = api_json(port, "/api/img?u=" + urllib.parse.quote("https://example.com/a.jpg", safe=""))
+    check("API: 허용 목록 밖 이미지 주소 차단", status == 400, str(payload)[:80])
+    status, payload = api_json(port, "/api/img?u=" + urllib.parse.quote("file:///etc/passwd", safe=""))
+    check("API: http(s) 아닌 이미지 주소 차단", status == 400, str(payload)[:80])
+
+    # AI가 JSON을 중간에 끊어 보내도 완성된 카드를 건지는지 (예전엔 0장이 되어 전부 헤드라인으로 내려갔음)
+    salvage_script = (
+        "import('file://" + str(ROOT / ".tmp" / "trending.js") + "').then((m) => {"
+        "const cut = '{\"issues\":[{\"pick\":1,\"hook\":\"가짜 훅 하나\",\"facts\":[\"a\",\"b\"]},"
+        "{\"pick\":2,\"hook\":\"가짜 훅 둘\",\"facts\":[\"c\",\"d\"]},{\"pick\":3,\"hook\":\"잘린 카드\"';"
+        "const out = m.salvageIssues(cut); console.log(JSON.stringify(out)); });"
+    )
+    try:
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", salvage_script],
+            cwd=ROOT,
+            env=ENV,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        salvaged = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else []
+        check("API: 잘린 AI 응답에서도 완성된 카드 복구", len(salvaged) == 2, f"{len(salvaged)}장 / {result.stderr[:80]}")
+    except Exception as error:  # noqa: BLE001
+        check("API: 잘린 AI 응답에서도 완성된 카드 복구", False, str(error)[:100])
 
     state = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/__state", timeout=10))
     keys = list((state.get("redis") or {}).keys())

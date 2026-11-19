@@ -216,15 +216,15 @@ def scenario_mouse(base: str, browser) -> None:
     page.wait_for_timeout(560)
     check("G5: 아래 점 클릭 → 2/5", counter(page) == "2 / 5", counter(page))
 
-    # --- 카드 안 링크 위에서 끌기 시작해도 카드가 넘어가고, 링크 클릭(새 탭)은 취소됨
+    # --- 카드 그림(2장) 위에서 끌기 시작해도 카드가 넘어감
     page.locator('[data-testid="progress-2"]').click()
-    page.wait_for_timeout(600)
-    link = page.locator('[data-testid="slide-2"] .cn-link').bounding_box()
-    lx, ly = link["x"] + min(40, link["width"] / 2), link["y"] + link["height"] / 2
+    page.wait_for_timeout(700)
+    shot = page.locator('[data-testid="slide-img-2"]').bounding_box()
+    lx, ly = shot["x"] + shot["width"] * 0.6, shot["y"] + shot["height"] * 0.7
     pages_before = len(ctx.pages)
     drag_mouse(page, (lx, ly), (lx - 190, ly))
-    check("G7: 링크 위에서 끌어도 2/5 → 3/5", counter(page) == "3 / 5", counter(page))
-    check("G7: 끌었을 뿐이면 링크는 안 열림", len(ctx.pages) == pages_before, f"{len(ctx.pages)} pages")
+    check("G7: 카드 위에서 끌어도 2/5 → 3/5", counter(page) == "3 / 5", counter(page))
+    check("G7: 끌었을 뿐이면 새 창은 안 열림", len(ctx.pages) == pages_before, f"{len(ctx.pages)} pages")
 
     # --- 투표 버튼은 카드 아래 토론에 있고, 그냥 누르면 정상 동작
     page.locator('[data-testid="vote-a"]').click()

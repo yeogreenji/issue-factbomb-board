@@ -52,7 +52,7 @@ const CACHE_FRESH_MS = 12 * 60 * 1000;
 const FEED_TIMEOUT_MS = 8_000;
 const MAX_ITEMS_PER_FEED = 40;
 const MAX_AGE_HOURS = 26;
-const CANDIDATE_LIMIT = 16;
+const CANDIDATE_LIMIT = 20;
 const CARD_LIMIT = 6;
 
 export type Category = "work" | "mz" | "money" | "tech" | "culture";
@@ -90,6 +90,8 @@ export interface Issue {
   sides: IssueSides | null;
   poll: IssuePoll;
   temp: number | null;
+  /** 제목·키워드로 계산한 화제성(0~99) — 인스타에 올렸을 때 반응이 붙을 만한 정도. */
+  buzz: number;
   tags: string[];
   ai: boolean;
 }
@@ -131,6 +133,13 @@ const FEEDS: Feed[] = [
   { name: "SBS 경제", slug: "sbs-economy", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=02", hint: "money" },
   { name: "블로터", slug: "bloter", source: "블로터", url: "https://www.bloter.net/rss/allArticle.xml", hint: "tech" },
   { name: "전자신문", slug: "etnews", source: "전자신문", url: "https://rss.etnews.com/Section901.xml", hint: "tech" },
+  // 인스타에서 반응이 붙는 쪽 — 연예·사회 사건·소비자 논란. 사진이 붙는 피드만 넣었습니다.
+  { name: "연합뉴스 연예", slug: "yna-ent", source: "연합뉴스", url: "https://www.yna.co.kr/rss/entertainment.xml", hint: "culture" },
+  { name: "연합뉴스 사회", slug: "yna-society", source: "연합뉴스", url: "https://www.yna.co.kr/rss/society.xml", hint: "mz" },
+  { name: "SBS 사회", slug: "sbs-society", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=03", hint: "mz" },
+  { name: "SBS 문화·라이프", slug: "sbs-life", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=08", hint: "culture" },
+  { name: "조선일보", slug: "chosun", source: "조선일보", url: "https://www.chosun.com/arc/outboundfeeds/rss/?outputType=xml", hint: "mz" },
+  { name: "매일경제", slug: "mk", source: "매일경제", url: "https://www.mk.co.kr/rss/30000001/", hint: "money" },
 ];
 
 /** 검증 하네스가 가짜 RSS를 띄울 때만 씁니다. 배포 환경에서는 비어 있어 실제 언론사 주소로 갑니다. */
@@ -150,6 +159,8 @@ interface Article {
   hint: Category;
   body?: string;
   score: number;
+  /** 화제성 0~99 — 제목의 논란성·연예·사건 키워드와 최신성으로 계산합니다. */
+  buzz: number;
 }
 
 const FEED_USER_AGENT =
@@ -229,6 +240,7 @@ export function parseFeed(xml: string, feed: Feed): Article[] {
       image: /^https?:\/\//i.test(image) ? image : "",
       hint: feed.hint,
       score: 0,
+      buzz: 0,
     });
   }
   return out;
@@ -265,21 +277,65 @@ const HOT_KEYWORDS: { re: RegExp; weight: number; category?: Category }[] = [
   { re: /(논란|의혹|사과|파문|반발|비판|고소|소송|철회|중단|1위|신기록|돌파|최저|최고)/, weight: 18 },
 ];
 
+/** 정례 보도·알림성 기사 — 인스타에서 아무도 반응하지 않습니다. 화제성에서 크게 깎습니다. */
+const ROUTINE_NEWS =
+  /(인사\s*발표|선임|위촉|협약|MOU|개최|개막|참석|방문|간담회|정례\s*브리핑|발표회|시상식|공모\s*시작|모집|접수\s*시작|안내문|캐패인|봉사|기부|추모|동정|논평|성명서)/;
+
+/**
+ * 인스타에서 공유·댓글이 티지는 결 — 논란·사건·연예·생활버. 제목에 걸리면 화제성을 올립니다.
+ * (팩트를 바꾸지 않습니다. 어떤 기사를 위로 올릴지 정하는 데만 씁니다.)
+ */
+const VIRAL_RULES: { re: RegExp; weight: number; category?: Category }[] = [
+  { re: /(논란|의혹|폭로|고발|저격|반박|사과|해명|진상|공분|분노|원성|비판|막말|갑질|황당)/, weight: 22 },
+  { re: /(사건|사고|충격|경악|발킵|소름|난리|아찔|역대급|사상\s*최초|최초|신기록|돌파)/, weight: 16 },
+  { re: /(단독|속보|긴급|특종|1보)/, weight: 14 },
+  { re: /(열애|결혼|이혼|파혼|임신|출산|복귀|컴백|탈퇴|사퇴|은퇴|입대|전역)/, weight: 18, category: "culture" },
+  { re: /(아이돌|배우|가수|드라마|예능|영화|팬덤|콘서트|티켓팅|웹툰|넷플릭스|유튜버|쇼츠|밈)/, weight: 14, category: "culture" },
+  { re: /(폭행|음주|마약|학폭|성추행|성희롱|탈세|횡령|배임|사기|소송|고소|구속|기소|사망|숨져|실종|화재|참사)/, weight: 26 },
+  { re: /(월급|연봉|성과급|최저임금|물가|장바구니|배달비|구독료|집값|전세|월세|대출|금리|세금|지원금|실업|해고|권고사직|정년|주\s*4일)/, weight: 18, category: "money" },
+  { re: /(불매|보이콧|집단\s*민원|서명|시위|집회|연대)/, weight: 16 },
+  { re: /(억대|수백억|수천억|\d+\s*배|\d+%|\d+만\s*원|\d+위|\d+명)/, weight: 10 },
+];
+
+/** 제목·최신성만으로 매기는 화제성(0~99) — 화면에도 그대로 숫자로 보여 줍니다. */
+function buzzOf(item: Article, now: number): number {
+  const ageHours = item.publishedAt > 0 ? (now - item.publishedAt) / 3_600_000 : 18;
+  let buzz = 46 - Math.min(30, ageHours * 1.2);
+  let hits = 0;
+  for (const rule of VIRAL_RULES) {
+    if (rule.re.test(item.title)) {
+      buzz += rule.weight;
+      hits += 1;
+    } else if (rule.re.test(item.summary)) {
+      buzz += rule.weight * 0.45;
+    }
+  }
+  if (hits >= 3) buzz += 6;
+  if (/\d/.test(item.title)) buzz += 7;
+  if (/[?!]$/.test(item.title.trim())) buzz += 4;
+  if (item.image) buzz += 6;
+  if (item.title.length >= 18 && item.title.length <= 46) buzz += 4;
+  if (ROUTINE_NEWS.test(item.title)) buzz -= 22;
+  if (DROP_TITLE.test(item.title)) buzz -= 30;
+  if (MICRO_NEWS.test(item.title)) buzz -= 18;
+  return Math.max(4, Math.min(99, Math.round(buzz)));
+}
+
 function scoreArticle(item: Article, now: number): number {
   const ageHours = item.publishedAt > 0 ? (now - item.publishedAt) / 3_600_000 : 40;
   if (ageHours > MAX_AGE_HOURS) return -1;
-  let score = Math.max(0, 44 - ageHours * 1.7);
-  if (item.summary.length > 70) score += 12;
-  else if (item.summary.length > 30) score += 6;
-  if (item.image) score += 5;
+  let score = Math.max(0, 44 - ageHours * 1.7) * 0.5;
   let relevant = false;
   for (const rule of HOT_KEYWORDS) {
     if (!rule.re.test(item.title) && !rule.re.test(item.summary)) continue;
-    score += rule.weight;
+    score += rule.weight * 0.6;
     relevant = true;
   }
+  // 화제성이 높은 기사를 위로 — 인스타에 올렸을 때 반응이 붙는 쪽입니다.
+  score += item.buzz * 0.95;
   // 2030이 말하게 되는 키워드가 하나도 없는 기사는 뒤로 밀립니다(조개 시세 같은 단신).
   if (!relevant) score -= 22;
+  if (item.summary.length > 70) score += 8;
   if (DROP_TITLE.test(item.title)) score -= 90;
   if (MICRO_NEWS.test(item.title)) score -= 60;
   if (item.title.length > 78) score -= 8;
@@ -307,13 +363,16 @@ function pickCandidates(items: Article[], limit: number): Article[] {
     // 같은 사안을 여러 곳이 받아쓴 기사(제목 앞부분이 같음)는 한 번만 씁니다.
     const prefix = key.slice(0, 18);
     if (prefix.length >= 12 && seenTitle.has(`p:${prefix}`)) continue;
-    const score = scoreArticle(item, now);
+    const withBuzz = { ...item, buzz: buzzOf(item, now) };
+    const score = scoreArticle(withBuzz, now);
     if (score < 0) continue;
+    // 연예·사건 키워드가 붙은 기사는 그 결에 맞는 카테고리로 보내 카드가 한쪽에 몰리지 않게 합니다.
+    const viralCategory = VIRAL_RULES.find((rule) => rule.category && rule.re.test(item.title))?.category;
     const categoryRule = HOT_KEYWORDS.find((rule) => rule.category && rule.re.test(item.title));
     seenUrl.add(item.url);
     seenTitle.add(key);
     if (prefix.length >= 12) seenTitle.add(`p:${prefix}`);
-    scored.push({ ...item, hint: categoryRule?.category ?? item.hint, score });
+    scored.push({ ...withBuzz, hint: categoryRule?.category ?? viralCategory ?? item.hint, score });
   }
 
   scored.sort((a, b) => b.score - a.score);
@@ -395,8 +454,8 @@ const SYSTEM_PROMPT = `당신은 20~30대가 실제로 반응하는 뉴스를 �
 - 투표 문항은 기사 속 갈등(누가 손해인지, 무엇이 부당한지, 어디까지 받아들일지)을 정면으로 묻습니다.
 
 카드 구성(각 이슈, 인스타 5장):
-1) hook: 표지 한 줄. 38자 이내. 숫자나 대비로 눈에 걸리게. 낚시성 왜곡 금지.
-2) kicker: 훅 아래 한 줄 맥락. 42자 이내.
+1) hook: 표지에 박히는 한 줄. 38자 이내. 인스타 피드를 넘기던 사람이 손을 멈출 만큼 — 숫자·반전·궁금증 중 최소 하나는 꼭. 낚시성 왜곡 금지.
+2) kicker: 훅 아래 한 줄 맥락. 42자 이내. 왜 지금 뜨는지 한 번에.
 3) facts: "무슨 일인데" 카드의 팩트 **정확히 3개**. 각 65자 이내. 서로 다른 내용이어야 하고, 가능하면 숫자·주체·행동이 들어가게.
 4) background: "왜 지금 뜨나" 카드의 배경 2문장, 110자 이내. 앞서 무슨 일이 있었는지·왜 갑자기 화제인지.
 5) point: "핵심 쟁점" 한 줄. 55자 이내. 무엇을 두고 갈리는지 한 문장으로.
@@ -419,13 +478,14 @@ function buildPrompt(items: Article[]): string {
     const at = item.publishedAt ? new Date(item.publishedAt).toISOString() : "";
     return [
       `[${index + 1}] ${item.title}`,
-      `- 출처: ${item.source} / 발행: ${at}`,
+      `- 출처: ${item.source} / 발행: ${at} / 화제성: ${item.buzz}`,
       excerpt ? `- 내용: ${excerpt}` : "- 내용: (요약 없음 — 제목만으로 확인 가능한 범위에서만 쓰세요)",
     ].join("\n");
   });
   return [
-    "아래는 오늘 한국 언론사 RSS에서 모은 후보 기사입니다. 이 중 20~30대가 실제로 말하게 될 이슈 5~6개를 골라 카드뉴스로 만드세요.",
-    "카테고리가 겹치지 않게 골라 주세요(가능하면 work·mz·money·tech·culture를 하나씩).",
+    "아래는 오늘 한국 언론사 RSS에서 모은 후보 기사입니다. 인스타에 올렸을 때 저장·공유·댓글 싸움이 붙을 이슈 5~6개를 골라 카드뉴스로 만드세요.",
+    "그중 최소 2개는 연예·사건·소비자 논란·직장 갑질처럼 댓글창이 갈리는 주제여야 합니다. 점잖은 발표 기사만 고르면 실패입니다.",
+    "카테고리가 겹치지 않게 골라 주세요(가능하면 work·mz·money·tech·culture를 하나씩). 화제성이 높은 후보를 먼저 보세요.",
     "pick에는 고른 후보 번호를 정확히 적으세요. 없는 번호는 쓰지 마세요.",
     "내용이 2문장도 안 되는 후보는 고르지 마세요. 팩트 3개를 채울 수 있는 기사만 고르세요.",
     "",
@@ -498,19 +558,85 @@ function fallbackBackground(item: Article, facts: string[]): string {
   return `${item.source}가 오늘 보도한 기사예요. 전체 내용은 원문에서 확인할 수 있어요.`;
 }
 
+/** AI가 제목을 함께 적어 보냈을 때, 그 제목으로 후보 기사를 찾습니다. */
+function matchByTitle(card: Record<string, unknown>, items: Article[], used: Set<number>): Article | undefined {
+  const hint = normalizeTitle(clean(card.title, 200));
+  if (hint.length < 6) return undefined;
+  const head = hint.slice(0, 14);
+  for (let index = 0; index < items.length; index += 1) {
+    if (used.has(index + 1)) continue;
+    const candidate = normalizeTitle(items[index].title);
+    if (candidate.length < 6) continue;
+    if (candidate.includes(head) || hint.includes(candidate.slice(0, 14))) return items[index];
+  }
+  return undefined;
+}
+
+/**
+ * AI가 JSON을 중간에 끊어 보내도 완성된 카드 객체만 건져 냅니다.
+ * (예전에는 이 경우 카드가 0장이 되어 "AI 응답 형식이 맞지 않아"로 전부 헤드라인으로 내려갔습니다.)
+ */
+export function salvageIssues(content: string): unknown[] {
+  const text = content.replace(/```(?:json)?/gi, " ");
+  const out: unknown[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const start = text.indexOf("{", cursor);
+    if (start < 0) break;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let end = -1;
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === "{") depth += 1;
+      else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          end = index;
+          break;
+        }
+      }
+    }
+    if (end < 0) {
+      // 바깥 객체가 잘렸으면 그 안의 완성된 카드라도 계속 찾습니다.
+      cursor = start + 1;
+      continue;
+    }
+    const slice = text.slice(start, end + 1);
+    try {
+      const parsed = JSON.parse(slice) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object" && ("hook" in parsed || "pick" in parsed)) out.push(parsed);
+      else if (parsed && Array.isArray(parsed.issues)) out.push(...parsed.issues);
+    } catch {
+      /* 잘린 객체는 건너뜁니다 */
+    }
+    cursor = end + 1;
+  }
+  return out;
+}
+
 function normalizeCards(raw: unknown, items: Article[]): Issue[] {
   const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const list = Array.isArray(row.issues) ? row.issues : Array.isArray(raw) ? (raw as unknown[]) : [];
   const used = new Set<number>();
   const issues: Issue[] = [];
 
-  for (const entry of list.slice(0, CARD_LIMIT + 2)) {
+  for (const entry of list.slice(0, CARD_LIMIT + 3)) {
     if (!entry || typeof entry !== "object") continue;
     const card = entry as Record<string, unknown>;
     const pick = clampInt(card.pick, 1, items.length, 0);
-    if (!pick || used.has(pick)) continue;
-    const item = items[pick - 1];
+    // pick이 없거나 틀려도 AI가 제목을 함께 줬으면 그 기사를 찾아 붙입니다(카드를 통째로 버리지 않도록).
+    const item = (pick && !used.has(pick) ? items[pick - 1] : undefined) ?? matchByTitle(card, items, used);
     if (!item) continue;
+    const slot = items.indexOf(item) + 1;
 
     const hook = cleanNewsText(card.hook, 80);
     const facts = fillFacts(cleanList(card.facts, 4, 110), item);
@@ -536,7 +662,7 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
       category,
     });
 
-    used.add(pick);
+    used.add(slot);
     issues.push({
       id: shortId(item.url),
       category,
@@ -556,6 +682,7 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
           ? { question: cleanNewsText(pollRaw.question, 60) || ownPoll.question, a: pollA, b: pollB }
           : ownPoll,
       temp: typeof card.temp === "undefined" ? null : clampInt(card.temp, 0, 100, 55),
+      buzz: item.buzz,
       tags: cleanList(card.tags, 3, 16).map((tag) => tag.replace(/^#/, "")),
       ai: true,
     });
@@ -565,7 +692,7 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
 
 /** AI가 없거나 실패했을 때 — 실제 기사 그대로의 최소 카드. 없는 내용은 채우지 않습니다. */
 function headlineCards(items: Article[]): Issue[] {
-  return items.slice(0, 5).map((item) => {
+  return items.slice(0, 6).map((item) => {
     const facts = fillFacts([], item);
     return {
       id: shortId(item.url),
@@ -584,6 +711,7 @@ function headlineCards(items: Article[]): Issue[] {
       // 제목만으로도 그 기사에만 통하는 A/B를 만듭니다(카드마다 다른 문항).
       poll: buildPoll({ title: item.title, summary: item.summary, body: item.body, category: item.hint }),
       temp: null,
+      buzz: item.buzz,
       tags: [],
       ai: false,
     };
@@ -621,10 +749,10 @@ async function collect(): Promise<TrendingDoc> {
       timeoutMs: 35_000,
     });
     if (outcome.ok) {
-      const parsed = parseJsonObject(outcome.content);
+      const parsed = parseJsonObject(outcome.content) ?? salvageIssues(outcome.content);
       issues = normalizeCards(parsed, candidates);
       if (issues.length > 0) aiUsed = { provider: outcome.provider, model: outcome.model };
-      else aiMessage = "AI 응답 형식이 맞지 않아 헤드라인 카드로 대신했습니다.";
+      else aiMessage = "AI 응답에서 카드를 찾지 못해 헤드라인 카드로 대신했습니다.";
     } else {
       aiMessage = outcome.message;
     }
@@ -668,6 +796,8 @@ async function loadDoc(refresh: boolean): Promise<TrendingDoc> {
   }
   return once(CACHE_KEY, async () => {
     const doc = await collect();
+  const sorted = [...doc.issues].sort((a, b) => b.buzz - a.buzz || (b.temp ?? 0) - (a.temp ?? 0));
+  doc.issues = sorted;
     if (doc.issues.length > 0) {
       await kvSet(CACHE_KEY, doc, CACHE_TTL_SECONDS);
       await Promise.all(

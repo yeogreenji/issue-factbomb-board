@@ -34,6 +34,8 @@ export interface Issue {
   sides: IssueSides | null;
   poll: IssuePoll;
   temp: number | null;
+  /** 제목·키워드로 계산한 화제성(0~99) — 인스타에 올렸을 때 반응이 붙을 만한 정도. */
+  buzz?: number;
   tags: string[];
   ai: boolean;
 }

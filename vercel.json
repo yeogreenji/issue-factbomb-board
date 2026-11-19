@@ -16,7 +16,16 @@
     "api/poll.ts": {
       "maxDuration": 30,
       "memory": 512
+    },
+    "api/img.ts": {
+      "maxDuration": 20,
+      "memory": 512
     }
   },
-  "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }]
+  "rewrites": [
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ]
 }

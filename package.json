@@ -1,9 +1,9 @@
 {
   "name": "issue-factbomb-board",
   "private": true,
-  "version": "5.0.0",
+  "version": "6.0.0",
   "type": "module",
-  "description": "이슈온도계 — 오늘의 실제 뉴스를 실시간으로 모아 인스타 4:5 카드뉴스 5장과 이슈마다 다른 팽팽한 A/B 투표·토론으로 읽는 공개 이슈 보드. /api/trending(언론사 RSS 13곳)·/api/briefing·/api/poll + 이슈별 문항 엔진(api/debate.ts)",
+  "description": "이슈온도계 — 실제 언론사 RSS 19곳에서 오늘의 바이럴·논란 기사를 모아 인스타 핫뉴스 카드뉴스 5장(사진 표지·매거진 조판)과 이슈마다 다른 A/B 투표·토론으로 읽는 공개 이슈 보드. /api/trending·/api/briefing·/api/poll·/api/img + 화제성 랭킹",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && tsc -p tsconfig.api.json && vite build",

@@ -7,6 +7,7 @@ interface Props {
   issue: Issue;
   index: number;
   poll: PollSnapshot | null;
+  recommended?: boolean;
   onOpen: (issue: Issue) => void;
 }
 
@@ -59,13 +60,14 @@ function MiniVote({ poll }: { poll: PollSnapshot | null }) {
   );
 }
 
-export function FeedCard({ issue, index, poll, onOpen }: Props) {
+export function FeedCard({ issue, index, poll, recommended, onOpen }: Props) {
   const meta = CATEGORY_META[issue.category];
   return (
     <article
       className="card"
       data-testid="feed-card"
       data-issue-id={issue.id}
+      data-recommended={recommended ? "true" : "false"}
       style={{ ["--accent" as string]: meta.color }}
     >
       <button
@@ -103,6 +105,7 @@ export function FeedCard({ issue, index, poll, onOpen }: Props) {
         <span className="card-body">
           <span className="card-meta">
             <span className="chip">{meta.label}</span>
+            {recommended && <span className="chip chip-pick">오늘 올릴 카드</span>}
             <span className="card-src">
               {issue.source}
               <span className="dot" aria-hidden="true" />
@@ -116,6 +119,10 @@ export function FeedCard({ issue, index, poll, onOpen }: Props) {
             </span>
           </span>
           <span className="card-hook">{issue.hook}</span>
+          <span className="card-buzz">
+            <b>화제 {issue.buzz ?? "-"}</b>
+            <span>{issue.temp !== null ? `논란 온도 ${issue.temp}°` : "제목·키워드 화제성"}</span>
+          </span>
           <PollTeaser issue={issue} compact />
           <MiniVote poll={poll} />
         </span>
