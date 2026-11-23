@@ -6,8 +6,8 @@
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: rgba(5, 5, 6, 0.78);
-  backdrop-filter: blur(16px) saturate(120%);
+  background: rgba(23, 22, 15, 0.4);
+  backdrop-filter: blur(10px) saturate(120%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -36,7 +36,7 @@
   gap: 10px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
-  background: rgba(11, 11, 12, 0.94);
+  background: rgba(244, 240, 230, 0.96);
   backdrop-filter: blur(10px);
   flex-shrink: 0;
 }
@@ -44,9 +44,9 @@
 .cn-icon {
   width: 36px;
   height: 36px;
-  border-radius: 999px;
+  border-radius: 3px;
   border: 1px solid var(--line-strong);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--surface);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -55,7 +55,8 @@
 }
 
 .cn-icon:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--ink);
+  color: var(--on-accent);
 }
 
 .cn-top-mid {
@@ -125,15 +126,15 @@
 
 .cn-seg {
   flex: 1;
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.16);
+  height: 3px;
+  border-radius: 0;
+  background: rgba(23, 22, 15, 0.16);
   padding: 0;
   transition: background 0.2s ease;
 }
 
 .cn-seg[data-on="true"] {
-  background: var(--accent, var(--lime));
+  background: var(--accent);
 }
 
 /* ---------------------------------------------------------------- card */
@@ -142,11 +143,11 @@
   width: 100%;
   max-width: 440px;
   margin: 0 auto;
-  border-radius: 20px;
+  border-radius: 3px;
   overflow: hidden;
-  background: #0b0b0c;
-  border: 1px solid var(--line);
-  box-shadow: 0 30px 70px -34px rgba(0, 0, 0, 0.95);
+  background: var(--paper-2);
+  border: 1px solid var(--ink);
+  box-shadow: 0 26px 50px -34px rgba(23, 22, 15, 0.6);
   container-type: inline-size;
 }
 
@@ -179,7 +180,7 @@
   position: relative;
   overflow: hidden;
   color: var(--ink);
-  background: #0b0b0c;
+  background: var(--paper-2);
 }
 
 .cn-ghost {
@@ -190,7 +191,7 @@
   font-size: 44cqw;
   line-height: 1;
   letter-spacing: -0.09em;
-  color: rgba(255, 255, 255, 0.045);
+  color: rgba(23, 22, 15, 0.045);
   pointer-events: none;
 }
 
@@ -201,7 +202,7 @@
   height: 100%;
   position: relative;
   overflow: hidden;
-  background: #08080a;
+  background: var(--paper-2);
   padding: 0;
   margin: 0;
 }
@@ -224,16 +225,14 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  background:
-    radial-gradient(120% 70% at 100% 0%, color-mix(in srgb, var(--accent, #d9ff3d) 26%, transparent), transparent 62%),
-    #0d0d10;
+  background: var(--paper-2);
 }
 
 .cn-slide-shimmer {
   width: 62%;
   height: 34%;
   border-radius: 12px;
-  background: linear-gradient(100deg, rgba(255, 255, 255, 0.04) 20%, rgba(255, 255, 255, 0.13) 40%, rgba(255, 255, 255, 0.04) 60%);
+  background: linear-gradient(100deg, rgba(23, 22, 15, 0.04) 20%, rgba(23, 22, 15, 0.13) 40%, rgba(23, 22, 15, 0.04) 60%);
   background-size: 220% 100%;
   animation: cn-shimmer 1.4s linear infinite;
 }
@@ -275,9 +274,9 @@
 .cn-nav > button {
   width: 42px;
   height: 38px;
-  border-radius: 999px;
+  border-radius: 3px;
   border: 1px solid var(--line-strong);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--surface);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -306,7 +305,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.24);
+  background: rgba(23, 22, 15, 0.24);
   padding: 0;
   transition: width 0.2s ease, background 0.2s ease;
 }
@@ -314,7 +313,7 @@
 .cn-dot[data-on="true"] {
   width: 18px;
   border-radius: 4px;
-  background: var(--accent, var(--lime));
+  background: var(--accent);
 }
 
 .cn-actions {
@@ -330,9 +329,9 @@
   gap: 5px;
   height: 38px;
   padding: 0 11px;
-  border-radius: 10px;
+  border-radius: 3px;
   border: 1px solid var(--line-strong);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--surface);
   font-size: 12px;
   font-weight: 700;
   color: var(--ink);
@@ -340,7 +339,7 @@
 }
 
 .cn-action:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(23, 22, 15, 0.1);
 }
 
 .cn-action:disabled {
@@ -350,6 +349,7 @@
 
 .cn-action.is-ghost {
   flex: 0 0 auto;
+  grid-column: span 2;
 }
 
 .cn-caption {
@@ -377,11 +377,18 @@
   gap: 4px;
   height: 30px;
   padding: 0 10px;
-  border-radius: 999px;
-  background: var(--lime);
-  color: #0b0b0c;
+  border-radius: 3px;
+  background: var(--ink);
+  border: 1px solid var(--ink);
+  color: var(--on-accent);
   font-size: 11.5px;
   font-weight: 800;
+}
+
+.cn-caption-head button.is-ghost {
+  background: transparent;
+  border-color: var(--line-strong);
+  color: var(--ink-2);
 }
 
 .cn-caption textarea {
@@ -390,7 +397,7 @@
   resize: vertical;
   border: 1px solid var(--line-strong);
   border-radius: 10px;
-  background: #0f0f11;
+  background: var(--surface);
   padding: 10px;
   font-size: 11.5px;
   line-height: 1.55;
@@ -448,7 +455,7 @@
   gap: 10px;
   padding: 13px;
   border-radius: 14px;
-  background: #0f0f11;
+  background: var(--surface);
   border: 1px solid var(--line);
 }
 
@@ -475,7 +482,7 @@
   padding: 8px 11px;
   border-radius: 10px;
   border: 1px solid var(--line-strong);
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(23, 22, 15, 0.03);
   overflow: hidden;
   text-align: left;
   font-size: 12.5px;
@@ -517,7 +524,7 @@
   height: 20px;
   border-radius: 6px;
   background: var(--side);
-  color: #0b0b0c;
+  color: var(--on-accent);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -581,13 +588,13 @@
 .side-btn[data-side="a"][data-on="true"] {
   background: var(--a);
   border-color: var(--a);
-  color: #0b0b0c;
+  color: var(--on-accent);
 }
 
 .side-btn[data-side="b"][data-on="true"] {
   background: var(--b);
   border-color: var(--b);
-  color: #0b0b0c;
+  color: var(--on-accent);
 }
 
 .talk-input-row {
@@ -601,7 +608,7 @@
   height: 40px;
   border-radius: 10px;
   border: 1px solid var(--line-strong);
-  background: #0f0f11;
+  background: var(--surface);
   padding: 0 11px;
   font-size: 13px;
   color: var(--ink);
@@ -612,7 +619,7 @@
 }
 
 .talk-input-row input:focus {
-  outline: 2px solid color-mix(in srgb, var(--accent, #d9ff3d) 45%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
   outline-offset: 1px;
 }
 
@@ -624,7 +631,7 @@
   padding: 0 12px;
   border-radius: 10px;
   background: var(--ink);
-  color: #0b0b0c;
+  color: var(--on-accent);
   font-size: 12px;
   font-weight: 800;
   flex-shrink: 0;
@@ -664,7 +671,7 @@
 .talk-filter button[data-on="true"] {
   background: var(--lime);
   border-color: var(--lime);
-  color: #0b0b0c;
+  color: var(--on-accent);
 }
 
 .talk-empty {
@@ -688,7 +695,7 @@
   border: 1px solid var(--line);
   border-left: 3px solid var(--line-strong);
   border-radius: 10px;
-  background: #0f0f11;
+  background: var(--surface);
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
@@ -717,18 +724,18 @@
   font-size: 9px;
   padding: 1px 6px;
   border-radius: 5px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(23, 22, 15, 0.08);
   color: var(--ink-2);
 }
 
 .talk-item[data-side="a"] .talk-side {
   background: var(--a);
-  color: #0b0b0c;
+  color: var(--on-accent);
 }
 
 .talk-item[data-side="b"] .talk-side {
   background: var(--b);
-  color: #0b0b0c;
+  color: var(--on-accent);
 }
 
 .talk-tag {
@@ -812,4 +819,231 @@
     font-size: 11px;
     padding: 0 8px;
   }
+}
+
+/* ---------------------------------------------- 캡션 도구 · 편집 표시 */
+
+.cn-caption-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cn-caption-tools .is-ghost {
+  background: rgba(23, 22, 15, 0.08);
+  color: var(--ink-2);
+}
+
+.cn-caption-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+  color: var(--faint);
+}
+
+.cn-caption-meta .is-edited {
+  color: var(--lime);
+}
+
+.cn-caption textarea {
+  min-height: 200px;
+}
+
+.cn-action.is-edit {
+  position: relative;
+}
+
+.cn-edit-dot {
+  position: absolute;
+  top: 7px;
+  right: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--lime);
+  box-shadow: 0 0 8px rgba(191, 54, 31, 0.55);
+}
+
+/* ---------------------------------------------- 투표 후 한 줄 반응 */
+
+.dlg-num {
+  position: relative;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.dlg-react {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 9px;
+  border-top: 1px dashed var(--line-strong);
+  animation: dlg-rise 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@keyframes dlg-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.dlg-react-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--ink-2);
+}
+
+.dlg-react-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.dlg-react-chips button {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  background: rgba(23, 22, 15, 0.04);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.dlg-react-chips button:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.dlg-react-row {
+  display: flex;
+  gap: 5px;
+}
+
+.dlg-react-row input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  border-radius: 9px;
+  border: 1px solid var(--line-strong);
+  background: #fff;
+  color: var(--ink);
+  font-size: 11.5px;
+  outline: none;
+}
+
+.dlg-react-row input:focus {
+  border-color: var(--line-strong);
+  box-shadow: 0 0 0 2px rgba(23, 22, 15, 0.06);
+}
+
+.dlg-react-row button {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--lime);
+  color: var(--on-accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dlg-react-row button:disabled {
+  opacity: 0.4;
+}
+
+/* 투표 %는 결과가 나온 뒤 살짝 튀어오릅니다 */
+.dlg-pct {
+  animation: dlg-pop 0.34s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@keyframes dlg-pop {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.94);
+  }
+}
+
+/* ---------------------------------------------- 요금제 잠금 표시 (v8) */
+
+.cn-action[data-locked="true"] {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.pro-dot {
+  margin-left: 2px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.caption-lock {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 9px;
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: 2px;
+  background: var(--paper-2);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.caption-lock svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.caption-lock span {
+  flex: 1;
+  min-width: 0;
+}
+
+.caption-lock b {
+  color: var(--ink);
+}
+
+.caption-lock button {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 2px;
+  background: var(--ink);
+  color: var(--on-accent);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.caption-plan {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
 }

@@ -1,6 +1,7 @@
 import { ArrowUpRight, ImageIcon } from "lucide-react";
 import type { Issue } from "../types";
 import { useSlidePreview } from "../lib/useSlidePreview";
+import { useActiveBrand } from "../lib/prefs";
 
 interface Props {
   issue: Issue;
@@ -14,7 +15,8 @@ interface Props {
  */
 export function CardPreview({ issue, onOpen }: Props) {
   const sides = issue.sides;
-  const coverUrl = useSlidePreview(issue, 0);
+  const brand = useActiveBrand();
+  const coverUrl = useSlidePreview(issue, 0, { theme: brand.theme, handle: brand.handle });
 
   return (
     <section className="preview" data-testid="card-preview">
@@ -47,9 +49,15 @@ export function CardPreview({ issue, onOpen }: Props) {
         <button type="button" className="pv pv-facts" onClick={() => onOpen(1)} aria-label="팩트 3줄부터 열기">
           <span className="pv-step">02</span>
           <span className="pv-chip">무슨 일인데</span>
-          <span className="pv-num">1</span>
-          <span className="pv-text">{issue.facts[0] ?? issue.hook}</span>
-          <span className="pv-more">+{Math.max(0, Math.min(3, issue.facts.length) - 1)}팩트</span>
+          <span className="pv-facts-list">
+            {issue.facts.slice(0, 3).map((fact, index) => (
+              <span className="pv-fact" key={index}>
+                <b>{index + 1}</b>
+                <span>{fact}</span>
+              </span>
+            ))}
+          </span>
+          <span className="pv-more">{issue.source}</span>
         </button>
 
         <button type="button" className="pv pv-issue" onClick={() => onOpen(2)} aria-label="쟁점부터 열기">
@@ -58,7 +66,8 @@ export function CardPreview({ issue, onOpen }: Props) {
           <span className="pv-quote" aria-hidden="true">
             “
           </span>
-          <span className="pv-text is-strong">{issue.point || issue.background || issue.kicker}</span>
+          <span className="pv-text is-strong">{issue.point || issue.kicker}</span>
+          {issue.background && <span className="pv-text">{issue.background}</span>}
           <span className="pv-more">{issue.source}</span>
         </button>
 

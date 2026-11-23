@@ -10,6 +10,8 @@
      AI가 없어도 카드마다 A/B 문항이 다른지
   E. 정적 배포 — 서버가 없을 때 안내가 뜨고 /api 요청을 보내지 않는지
   F. 데스크톱 1280 — 2단(카드 | 토론) 레이아웃·가로 넘침
+  G. 크리에이터 작업대 — 검색·카테고리·저장함·발행 체크·캡션 해시태그 12~15개·
+     문구 편집(카드·PNG에 반영)·테마 4종·워터마크·원문 되돌리기
 
 실행: npm run verify   (필요하면 스크립트가 직접 빌드합니다)
 """
@@ -67,6 +69,17 @@ def attach(page, tag: str):
 
 def settle(page, ms: int = 250) -> None:
     page.wait_for_timeout(ms)
+
+
+def seed_plan(ctx, plan: str = "pro") -> None:
+    """브라우저를 열기 전에 요금제를 심습니다 — Pro 기능(5장 ZIP·@핸들·4테마·캡션)을 쓰는 흐름."""
+    ctx.add_init_script(
+        script=(
+            "try { localStorage.setItem('issue-thermo.plan.v1', JSON.stringify({"
+            f"plan: '{plan}', trial: {'true' if plan != 'free' else 'false'}, billing: 'monthly'"
+            "})); } catch (e) {}"
+        )
+    )
 
 
 def free_port(port: int) -> None:
@@ -307,6 +320,7 @@ def scenario_mobile(base: str, browser):
         accept_downloads=True,
         permissions=["clipboard-read", "clipboard-write"],
     )
+    seed_plan(ctx, "pro")
     page = attach(ctx.new_page(), "A")
     page.goto(base, wait_until="networkidle")
     page.wait_for_selector('[data-testid="feed-card"]', timeout=20000)
@@ -332,9 +346,11 @@ def scenario_mobile(base: str, browser):
     check("A: 수집 시각·건수·AI 상태 노출", "기준" in strip and "이슈" in strip and "AI" in strip, strip)
     check("A: 언론사 수집 현황 노출", "언론사" in strip, strip)
 
-    font = page.evaluate("getComputedStyle(document.querySelector('.hero-hook')).fontFamily")
+    body_font = page.evaluate("getComputedStyle(document.body).fontFamily")
+    hook_font = page.evaluate("getComputedStyle(document.querySelector('.hero-hook')).fontFamily")
     size = page.evaluate("parseFloat(getComputedStyle(document.querySelector('.hero-hook')).fontSize)")
-    check("A: Pretendard/SUIT 고딕", "Pretendard" in font or "SUIT" in font, font)
+    check("A: 본문 Pretendard/SUIT 고딕", "Pretendard" in body_font or "SUIT" in body_font, body_font)
+    check("A: 헤드라인 세리프(매거진)", "serif" in hook_font.lower(), hook_font)
     check("A: 임팩트 헤드라인(26px 이상)", size >= 26, str(size))
 
     check("A: 모바일 390 가로 넘침 없음(피드)", no_overflow(page))
@@ -577,6 +593,8 @@ def scenario_briefing(base: str, browser, port: int):
     page.locator('[data-testid="studio-submit"]').click()
     page.wait_for_selector('[data-testid="viewer"]', timeout=45000)
     settle(page, 600)
+    # 카드 5장은 캔버스로 그려 순서대로 올라옵니다 — 다 그려질 때까지 기다립니다.
+    page.wait_for_selector('[data-testid="slide-img-5"]', timeout=25000)
     check("C: 한 줄 이슈로도 카드 생성", page.locator('[data-testid="slide-img-5"]').count() == 1)
     page.locator('[data-testid="close-viewer"]').click()
     settle(page, 300)
@@ -696,6 +714,412 @@ def scenario_desktop(base: str, browser):
     page.wait_for_selector('[data-testid="result-b"]', timeout=8000)
     settle(page, 500)
     page.screenshot(path=str(SHOTS / "02c-desktop-vote.png"))
+
+    # 편집실 2단(편집 | 실시간 미리보기)과 요금제 — 데스크톱 화면
+    page.locator('[data-testid="open-editor"]').click()
+    page.wait_for_selector('[data-testid="studio-sheet"]')
+    settle(page, 1800)
+    split = page.evaluate(
+        """() => {
+            const e = document.querySelector('.studio-editor').getBoundingClientRect();
+            const p = document.querySelector('.studio-preview-rail').getBoundingClientRect();
+            const f = document.querySelector('[data-testid="save-copy"]').getBoundingClientRect();
+            const rail = document.querySelector('.studio-preview-rail').getBoundingClientRect();
+            return { editorRight: Math.round(e.right), previewLeft: Math.round(p.left),
+                     previewBottom: Math.round(p.bottom), footTop: Math.round(f.top),
+                     railBottom: Math.round(rail.bottom) };
+        }"""
+    )
+    check("F: 편집실과 미리보기가 좌우 2단", split["previewLeft"] >= split["editorRight"] - 2, str(split))
+    check("F: 미리보기가 저장 줄을 덮지 않음", split["railBottom"] <= split["footTop"] + 2, str(split))
+    page.screenshot(path=str(SHOTS / "24-desktop-studio.png"))
+    page.locator('[data-testid="studio-sheet"] .sheet-head .icon-btn').click()
+    settle(page, 400)
+    page.locator('[data-testid="close-viewer"]').click()
+    settle(page, 400)
+    page.locator('[data-testid="open-pricing"]').click()
+    page.wait_for_selector('[data-testid="pricing-sheet"]')
+    settle(page, 700)
+    check("F: 요금제 3열", page.evaluate("getComputedStyle(document.querySelector('.plan-grid')).gridTemplateColumns.split(' ').length") == 3)
+    page.screenshot(path=str(SHOTS / "25-desktop-pricing.png"))
+    ctx.close()
+
+
+
+
+# ---------------------------------------------------- scenario G (크리에이터 작업대)
+
+def wait_hash_change(page, slide: int, before: str, timeout: float = 20.0) -> str:
+    """카드를 다시 그리면 슬라이드 해시가 바뀝니다 — 그때까지 기다립니다."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        value = page.locator(f'[data-testid="slide-img-{slide}"]').get_attribute("data-hash") or ""
+        if value and value != before:
+            return value
+        time.sleep(0.25)
+    return ""
+
+
+def hashtag_count(text: str) -> int:
+    # 링크(#/i/…)는 해시태그가 아닙니다.
+    return len(re.findall(r"(?:^|\s)#[^\s#]+", text))
+
+
+def scenario_creator(base: str, browser):
+    """크리에이터가 실제로 쓰는 흐름 — 검색·저장함·발행 체크·문구 편집·테마·워터마크·캡션."""
+    ctx = browser.new_context(
+        viewport={"width": 390, "height": 844},
+        device_scale_factor=2,
+        is_mobile=True,
+        has_touch=True,
+        accept_downloads=True,
+        permissions=["clipboard-read", "clipboard-write"],
+    )
+    seed_plan(ctx, "pro")
+    page = attach(ctx.new_page(), "G")
+    page.goto(base, wait_until="networkidle")
+    page.wait_for_selector('[data-testid="feed-card"]', timeout=20000)
+    settle(page, 600)
+
+    total = page.locator('[data-testid="feed-card"]').count()
+    check("G: 크리에이터 작업 줄(검색·카테고리·상태)", page.locator('[data-testid="workflow-bar"]').count() == 1)
+    check("G: 하루 발행 목표 표시", "오늘 발행" in page.locator(".work-goal").inner_text(), page.locator(".work-goal").inner_text())
+    check("G: 상단에 테마 칩", page.locator('[data-testid="open-brand"]').count() == 1)
+    check("G: 상단 발행 카운터", "발행" in page.locator('[data-testid="publish-pill"]').inner_text())
+
+    # 1) 검색
+    first_hook = page.locator('[data-testid="feed-card"] .card-hook').first.inner_text().strip()
+    needle = first_hook[:3]
+    page.fill('[data-testid="search-input"]', needle)
+    settle(page, 500)
+    shown = page.locator('[data-testid="feed-card"]').count() + page.locator('[data-testid="hero-card"]').count()
+    check("G: 검색으로 오늘 카드 좁히기", 1 <= shown <= total + 1, f"'{needle}' → {shown}건 / 전체 {total + 1}건")
+    check("G: 검색 결과 건수 표시", "보는 중" in page.locator('[data-testid="filter-count"]').inner_text())
+    page.fill('[data-testid="search-input"]', "")
+    settle(page, 400)
+
+    # 2) 카테고리 필터 — 지금 목록에 실제로 있는 카테고리로 좁혀 봅니다.
+    CATEGORY_KEYS = {"직장·커리어": "work", "MZ·트렌드": "mz", "소비·경제": "money", "테크·AI": "tech", "문화·연예": "culture"}
+    first_cat = page.evaluate(
+        "() => document.querySelector('[data-testid=\"feed-card\"] .card-meta .chip').textContent.trim()"
+    )
+    if first_cat in CATEGORY_KEYS:
+        page.locator(f'[data-testid="filter-category-{CATEGORY_KEYS[first_cat]}"]').click()
+        settle(page, 450)
+        labels = page.evaluate(
+            """() => Array.from(document.querySelectorAll('[data-testid="feed-card"] .card-meta .chip:first-child, [data-testid="hero-card"] .chip-onDark')).map(e => e.textContent.trim())"""
+        )
+        check("G: 카테고리 필터가 목록에 적용됨", len(labels) >= 1 and all(label == first_cat for label in labels), f"{first_cat} → {labels}")
+    else:
+        check("G: 카테고리 필터가 목록에 적용됨", False, f"카테고리 칩을 찾지 못함: {first_cat}")
+    page.locator('[data-testid="filter-category-all"]').click()
+    settle(page, 400)
+
+    # 3) 저장함
+    card = page.locator('[data-testid="feed-card"]').first
+    saved_id = card.get_attribute("data-issue-id") or ""
+    card.locator('[data-testid="toggle-save"]').click()
+    settle(page, 350)
+    check("G: 저장함 표시", page.locator(f'[data-issue-id="{saved_id}"]').first.get_attribute("data-saved") == "true")
+    page.locator('[data-testid="filter-status-saved"]').click()
+    settle(page, 450)
+    visible = page.locator('[data-testid="feed-card"], [data-testid="hero-card"]').count()
+    check("G: 저장함 필터 = 저장한 카드만", visible == 1 and page.locator(f'[data-issue-id="{saved_id}"]').count() == 1, f"{visible}건")
+    page.locator('[data-testid="filter-status-all"]').click()
+    settle(page, 400)
+
+    # 4) 발행 완료 체크
+    page.locator(f'[data-issue-id="{saved_id}"] [data-testid="toggle-published"]').first.click()
+    settle(page, 400)
+    check("G: 발행 완료 표시", page.locator(f'[data-issue-id="{saved_id}"]').first.get_attribute("data-published") == "true")
+    check("G: 오늘 발행 카운터 1", page.locator('[data-testid="publish-pill"]').inner_text().strip().startswith("1"), page.locator('[data-testid="publish-pill"]').inner_text())
+    page.locator('[data-testid="filter-status-done"]').click()
+    settle(page, 450)
+    check("G: 발행 완료 필터", page.locator(f'[data-issue-id="{saved_id}"]').count() == 1)
+    page.locator('[data-testid="filter-status-all"]').click()
+    settle(page, 400)
+
+    # 5) 새로고침 후에도 저장함·발행 체크 유지(LocalStorage)
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector('[data-testid="feed-card"]', timeout=20000)
+    settle(page, 700)
+    check(
+        "G: 새로고침해도 저장함·발행 체크 유지",
+        page.locator(f'[data-issue-id="{saved_id}"]').first.get_attribute("data-saved") == "true"
+        and page.locator(f'[data-issue-id="{saved_id}"]').first.get_attribute("data-published") == "true",
+    )
+
+    # 6) 카드뉴스 — 캡션 해시태그 12~15개
+    open_viewer(page)
+    wait_slides(page)
+    page.locator('[data-testid="open-caption"]').click()
+    page.wait_for_selector('[data-testid="caption-panel"]')
+    settle(page, 300)
+    caption = page.locator('[data-testid="caption-text"]').input_value()
+    tags = hashtag_count(caption)
+    check("G: 인스타 캡션 해시태그 12~15개", 12 <= tags <= 15, f"{tags}개")
+    check("G: 캡션에 3줄 요약·토론 질문", "Q." in caption and "A." in caption and "B." in caption and caption.count("\n1.") >= 1, caption[:80])
+    page.screenshot(path=str(SHOTS / "19-creator-caption.png"))
+
+    # 7) 문구 편집 — 헤드라인을 바꾸면 카드가 다시 그려지고 PNG도 바뀝니다.
+    page.locator('[data-testid="progress-1"]').click()
+    settle(page, 400)
+    before_hash = page.locator('[data-testid="slide-img-1"]').get_attribute("data-hash") or ""
+    png_before = ROOT / ".tmp" / "g-before.png"
+    save_download(page, '[data-testid="save-png"]', png_before)
+    before_sha = sha256_of(png_before) if png_before.exists() else ""
+
+    page.locator('[data-testid="open-editor"]').click()
+    page.wait_for_selector('[data-testid="studio-sheet"]')
+    settle(page, 350)
+    check("G: 문구 편집실 열림", page.locator('[data-testid="theme-editorial"]').count() == 1)
+    page.screenshot(path=str(SHOTS / "19b-creator-studio.png"))
+
+    # 7-1) 방금 PNG 저장 토스트가 떠 있는 동안 편집실을 열었습니다 — 버튼을 가리면 안 됩니다.
+    toast = page.evaluate(
+        """() => {
+            const r = (s) => { const el = document.querySelector(s); return el ? el.getBoundingClientRect() : null; };
+            const hit = (a, b) => Boolean(a && b) && !(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top);
+            const t = r('[data-testid="toast"]');
+            return {
+                has: Boolean(t),
+                top: t ? Math.round(t.top) : null,
+                overlapsSave: hit(t, r('[data-testid="save-copy"]')),
+                overlapsClose: hit(t, r('.studio-head .icon-btn')),
+                overlapsFoot: hit(t, r('.studio-foot')),
+                overlapsSheet: hit(t, r('[data-testid="studio-sheet"]')),
+            };
+        }"""
+    )
+    check("G: 편집실을 연 순간 토스트가 떠 있음(겹침 검사 대상)", toast["has"], str(toast))
+    check("G: 토스트가 저장 버튼을 가리지 않음", not toast["overlapsSave"], str(toast))
+    check("G: 토스트가 닫기 버튼을 가리지 않음", not toast["overlapsClose"], str(toast))
+    check("G: 토스트가 편집실 하단 줄을 가리지 않음", not toast["overlapsFoot"], str(toast))
+
+    # 7-2) 카드 5장 탭 — 라벨이 잘리지 않고 시트 안에 들어오는가
+    tabs = page.evaluate(
+        """() => {
+            const sheet = document.querySelector('[data-testid="studio-sheet"]').getBoundingClientRect();
+            return Array.from(document.querySelectorAll('.studio-tabs button')).map((b) => {
+                const r = b.getBoundingClientRect();
+                return {
+                    label: b.textContent.trim(),
+                    clipped: b.scrollWidth > b.clientWidth + 1,
+                    inside: r.right <= sheet.right + 0.5 && r.left >= sheet.left - 0.5,
+                };
+            });
+        }"""
+    )
+    check("G: 카드 5장 탭 = 5개", len(tabs) == 5, str(tabs))
+    check("G: 탭 라벨이 잘리지 않음", all(not t["clipped"] for t in tabs), str(tabs))
+    check("G: 탭이 시트 밖으로 넘치지 않음", all(t["inside"] for t in tabs), str(tabs))
+
+    # 7-3) 편집실 옆 실시간 4:5 미리보기 + 인스타 3×3 피드
+    live_before = ROOT / ".tmp" / "live-before.png"
+    live_card = page.locator('[data-testid="live-card"]')
+    check("G: 편집실 옆 실시간 미리보기", live_card.count() == 1)
+    live_card.screenshot(path=str(live_before))
+    ratio = page.evaluate(
+        "() => { const r = document.querySelector('.live-card-frame').getBoundingClientRect(); return Math.round((r.width / r.height) * 1000) / 1000; }"
+    )
+    check("G: 미리보기 프레임 4:5", abs(ratio - 0.8) < 0.03, str(ratio))
+    grid = page.evaluate(
+        """() => {
+            const root = document.querySelector('[data-testid="feed-grid-preview"]');
+            if (!root) return null;
+            const cells = Array.from(root.querySelectorAll('.grid-cell'));
+            const imgs = cells.map((c) => c.querySelector('img')).filter(Boolean);
+            return { cells: cells.length, imgs: imgs.length, loaded: imgs.filter((i) => i.naturalWidth === 1080).length };
+        }"""
+    )
+    check("G: 인스타 3×3 피드 미리보기", bool(grid) and grid["cells"] >= 4, str(grid))
+    check("G: 피드 칸에 실제 카드 표지가 그려짐", bool(grid) and grid["imgs"] >= 4 and grid["loaded"] >= 4, str(grid))
+    page.screenshot(path=str(SHOTS / "20-creator-live-preview.png"))
+
+    NEW_HOOK = "내가 고친 헤드라인, 이제 42%로 간다"
+    page.fill('[data-testid="copy-hook-0"]', NEW_HOOK)
+    page.wait_for_timeout(1200)
+    live_after = ROOT / ".tmp" / "live-after.png"
+    live_card.screenshot(path=str(live_after))
+    check(
+        "G: 문구를 고치면 편집실 미리보기가 바로 바뀜",
+        live_after.exists() and live_before.exists() and sha256_of(live_after) != sha256_of(live_before),
+    )
+    page.fill('[data-testid="handle-input"]', "my_newsroom")
+    page.locator('[data-testid="edit-tab-5"]').click()
+    settle(page, 200)
+    page.fill('[data-testid="copy-question-0"]', "이 소식, 어디까지 믿어?")
+    # X로 닫아도 저장되도록 했습니다(닫으면 자동 반영).
+    page.locator('[data-testid="studio-sheet"] .sheet-head .icon-btn').click()
+    after_hash = wait_hash_change(page, 1, before_hash)
+    check("G: 문구를 고치면 카드가 다시 그려짐", bool(after_hash), f"{before_hash[:8]} → {after_hash[:8]}")
+    label1 = page.locator('[data-testid="slide-1"]').get_attribute("aria-label") or ""
+    check("G: 고친 헤드라인이 카드에 박힘", NEW_HOOK in label1, label1[:80])
+    check("G: 워터마크 핸들이 카드에 박힘", "@my_newsroom" in label1, label1[:80])
+    check("G: 투표 질문도 고친 문구로", "이 소식, 어디까지 믿어?" in (page.locator('[data-testid="poll-question"]').inner_text()), page.locator('[data-testid="poll-question"]').inner_text())
+
+    png_after = ROOT / ".tmp" / "g-after.png"
+    save_download(page, '[data-testid="save-png"]', png_after)
+    check("G: 고친 카드의 PNG가 원본과 다름", png_after.exists() and sha256_of(png_after) != before_sha)
+    check("G: 고친 카드도 1080×1350", png_size(png_after) == (1080, 1350) if png_after.exists() else False)
+
+    # 8) 테마 4종 — 표지 픽셀이 실제로 달라집니다.
+    def cover_avg():
+        return page.evaluate(
+            """() => {
+                const img = document.querySelector('[data-testid="slide-img-1"]');
+                const c = document.createElement('canvas'); c.width = 40; c.height = 20;
+                const x = c.getContext('2d'); x.drawImage(img, 0, 0, 40, 20);
+                const d = x.getImageData(0, 0, 40, 20).data;
+                let r = 0, g = 0, b = 0;
+                for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+                const n = d.length / 4;
+                return [Math.round(r / n), Math.round(g / n), Math.round(b / n)];
+            }"""
+        )
+
+    seen = {}
+    for theme, label in (("editorial", "에디토리얼 다크"), ("modern", "모던 화이트"), ("breaking", "브레이킹 레드"), ("pastel", "트렌디 파스텔")):
+        prev_hash = page.locator('[data-testid="slide-img-1"]').get_attribute("data-hash") or ""
+        page.locator('[data-testid="open-editor"]').click()
+        page.wait_for_selector('[data-testid="studio-sheet"]')
+        page.locator(f'[data-testid="theme-{theme}"]').click()
+        page.locator('[data-testid="studio-sheet"] .sheet-head .icon-btn').click()
+        wait_hash_change(page, 1, prev_hash)
+        settle(page, 500)
+        seen[theme] = cover_avg()
+        check(f"G: 테마 {label} 적용", label in (page.locator(".cn-hint").inner_text()), page.locator(".cn-hint").inner_text()[:80])
+    distinct = {tuple(value) for value in seen.values()}
+    check("G: 테마마다 표지 색이 실제로 다름", len(distinct) == 4, str(seen))
+
+    # 9) 원문으로 되돌리기
+    prev_hash = page.locator('[data-testid="slide-img-1"]').get_attribute("data-hash") or ""
+    page.locator('[data-testid="open-editor"]').click()
+    page.wait_for_selector('[data-testid="studio-sheet"]')
+    page.locator('[data-testid="reset-copy"]').click()
+    page.locator('[data-testid="studio-sheet"] .sheet-head .icon-btn').click()
+    wait_hash_change(page, 1, prev_hash)
+    settle(page, 500)
+    restored = page.locator('[data-testid="slide-1"]').get_attribute("aria-label") or ""
+    check("G: 원문 문구로 되돌리기", NEW_HOOK not in restored and len(restored) > 20, restored[:70])
+    check("G: 워터마크는 유지", "@my_newsroom" in restored, restored[:70])
+
+    # 10) 모바일 가로 넘침 없음(작업 줄·편집실 포함)
+    check("G: 모바일 390 가로 넘침 없음", no_overflow(page))
+    page.locator('[data-testid="close-viewer"]').click()
+    settle(page, 400)
+    page.locator('[data-testid="open-brand"]').click()
+    page.wait_for_selector('[data-testid="studio-sheet"]')
+    settle(page, 300)
+    check("G: 브랜드 설정(테마·워터마크) 시트", page.locator('[data-testid="handle-input"]').count() == 1)
+    check("G: 편집실에서도 가로 넘침 없음", no_overflow(page))
+    page.screenshot(path=str(SHOTS / "19c-creator-brand.png"))
+    ctx.close()
+
+
+# ------------------------------------------------------------ 요금제와 잠금
+
+def scenario_plans(base: str, browser):
+    """Free → 잠금 확인 → Creator Pro 무료 체험 → 열림 → Free로 복귀."""
+    ctx = browser.new_context(
+        viewport={"width": 390, "height": 844},
+        device_scale_factor=2,
+        is_mobile=True,
+        has_touch=True,
+        accept_downloads=True,
+        permissions=["clipboard-read", "clipboard-write"],
+    )
+    page = attach(ctx.new_page(), "P")
+    page.goto(base, wait_until="networkidle")
+    page.wait_for_selector('[data-testid="feed-card"]', timeout=20000)
+    settle(page, 600)
+
+    chip = page.locator('[data-testid="open-pricing"]')
+    check("P: 상단에 요금제 칩", chip.count() == 1)
+    check("P: 처음엔 Free 플랜", "Free" in chip.inner_text(), chip.inner_text())
+
+    open_viewer(page)
+    wait_slides(page)
+    check("P: Free에서는 5장 ZIP 잠금", page.locator('[data-testid="save-all"]').get_attribute("data-locked") == "true")
+    check("P: 잠긴 버튼에 자물쇠·Pro 표시", page.locator('[data-testid="save-all"] .pro-dot').count() == 1)
+
+    page.locator('[data-testid="open-caption"]').click()
+    page.wait_for_selector('[data-testid="caption-lock"]', timeout=6000)
+    free_caption = page.locator('[data-testid="caption-text"]').input_value()
+    check(
+        "P: Free 캡션은 기본본(태그 5개·3줄 요약 없음)",
+        hashtag_count(free_caption) == 5 and "Q." not in free_caption,
+        f"{hashtag_count(free_caption)}개",
+    )
+    page.screenshot(path=str(SHOTS / "23-caption-free.png"))
+    page.locator('[data-testid="open-caption"]').click()
+
+    page.locator('[data-testid="save-all"]').click()
+    page.wait_for_selector('[data-testid="pricing-sheet"]', timeout=6000)
+    settle(page, 500)
+    check("P: 잠긴 기능을 누르면 요금제가 열림", page.locator('[data-testid="pricing-sheet"]').count() == 1)
+    plans = page.locator('[data-testid="pricing-sheet"]').inner_text()
+    check("P: 가격표에 Free·14,900·39,000", "Free" in plans and "14,900" in plans and "39,000" in plans)
+    check("P: 기능 비교표", page.locator('[data-testid="feature-table"]').count() == 1)
+    check("P: 무료 체험이 결제 전 데모임을 적음", "결제" in plans and "체험" in plans)
+    page.screenshot(path=str(SHOTS / "21-pricing.png"))
+
+    page.locator('[data-testid="billing-annual"]').click()
+    settle(page, 400)
+    annual = page.locator('[data-testid="pricing-sheet"]').inner_text()
+    check("P: 연 결제(2개월 무료) 가격", "149,000" in annual and "390,000" in annual, annual[:140])
+    page.locator('[data-testid="billing-monthly"]').click()
+    settle(page, 300)
+
+    page.locator('[data-testid="plan-pro-cta"]').click()
+    settle(page, 700)
+    check("P: Pro 무료 체험 켜짐", "Pro" in chip.inner_text() and "체험" in chip.inner_text(), chip.inner_text())
+    page.locator('[data-testid="close-pricing"]').click()
+    settle(page, 450)
+    check("P: 체험 후 5장 ZIP 열림", page.locator('[data-testid="save-all"]').get_attribute("data-locked") == "false")
+
+    zip_path = ROOT / ".tmp" / "plan-5.zip"
+    if save_download(page, '[data-testid="save-all"]', zip_path):
+        check("P: Pro에서 5장 ZIP 저장", zip_path.read_bytes()[:2] == b"PK")
+
+    page.locator('[data-testid="open-caption"]').click()
+    page.wait_for_selector('[data-testid="caption-text"]')
+    settle(page, 300)
+    pro_caption = page.locator('[data-testid="caption-text"]').input_value()
+    tags = hashtag_count(pro_caption)
+    check("P: Pro 캡션 해시태그 12~15개", 12 <= tags <= 15, f"{tags}개")
+    check("P: Pro 캡션에 3줄 요약·A/B", "Q." in pro_caption and "A." in pro_caption and "B." in pro_caption)
+    page.locator('[data-testid="open-caption"]').click()
+
+    # 테마 4종·@핸들 — Pro에서는 잠금이 풀립니다.
+    page.locator('[data-testid="open-editor"]').click()
+    page.wait_for_selector('[data-testid="studio-sheet"]')
+    settle(page, 500)
+    check("P: Pro에서 테마 잠금 없음", page.locator('.theme-card[data-locked="true"]').count() == 0)
+    check("P: Pro에서 핸들 입력 가능", page.locator('[data-testid="handle-input"]').is_editable())
+    page.locator('[data-testid="theme-modern"]').click()
+    settle(page, 600)
+    check("P: Pro에서는 테마를 누르면 요금제가 아니라 테마가 바뀜", page.locator('[data-testid="pricing-sheet"]').count() == 0)
+    check("P: 모던 화이트 선택됨", page.locator('[data-testid="theme-modern"]').get_attribute("data-on") == "true")
+    page.locator('[data-testid="studio-sheet"] .sheet-head .icon-btn').click()
+    settle(page, 450)
+    page.locator('[data-testid="close-viewer"]').click()
+    settle(page, 450)
+
+    page.locator('[data-testid="open-pricing"]').click()
+    page.wait_for_selector('[data-testid="pricing-sheet"]')
+    settle(page, 300)
+    page.locator('[data-testid="plan-free-cta"]').click()
+    settle(page, 600)
+    check("P: Free로 돌아가기", "Free" in chip.inner_text(), chip.inner_text())
+    page.locator('[data-testid="close-pricing"]').click()
+    settle(page, 400)
+
+    open_viewer(page)
+    settle(page, 1000)
+    hint = page.locator(".cn-hint").inner_text()
+    check("P: Free로 내려가면 카드도 기본 테마·워터마크", "에디토리얼" in hint, hint[:90])
+    check("P: Free로 내려가면 5장 ZIP 다시 잠금", page.locator('[data-testid="save-all"]').get_attribute("data-locked") == "true")
     ctx.close()
 
 
@@ -890,6 +1314,10 @@ def main() -> int:
                 scenario_briefing(f"http://127.0.0.1:{port_a}/", browser, port_a)
                 print("== F: 데스크톱 ==")
                 scenario_desktop(f"http://127.0.0.1:{port_a}/", browser)
+                print("== G: 크리에이터 작업대 ==")
+                scenario_creator(f"http://127.0.0.1:{port_a}/", browser)
+                print("== P: 요금제·잠금 ==")
+                scenario_plans(f"http://127.0.0.1:{port_a}/", browser)
             finally:
                 browser.close()
 

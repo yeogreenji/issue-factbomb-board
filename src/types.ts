@@ -105,11 +105,74 @@ export interface PollsResponse {
   message?: string;
 }
 
-/** 카테고리 색은 검정 바탕에서 바로 읽히는 네온 톤으로 맞췄습니다. */
-export const CATEGORY_META: Record<Category, { label: string; short: string; color: string; soft: string }> = {
-  work: { label: "직장·커리어", short: "직장", color: "#7EF0C0", soft: "rgba(126, 240, 192, 0.16)" },
-  mz: { label: "MZ·트렌드", short: "MZ", color: "#C9A7FF", soft: "rgba(201, 167, 255, 0.18)" },
-  money: { label: "소비·경제", short: "소비", color: "#FFC46B", soft: "rgba(255, 196, 107, 0.16)" },
-  tech: { label: "테크·AI", short: "테크", color: "#8FB6FF", soft: "rgba(143, 182, 255, 0.18)" },
-  culture: { label: "문화·연예", short: "문화", color: "#FF9EC4", soft: "rgba(255, 158, 196, 0.18)" },
+/** 카드에 실제로 인쇄되는 문구 — 크리에이터가 편집실에서 직접 고칠 수 있는 전부. */
+export interface CardCopy {
+  hook: string;
+  kicker: string;
+  facts: string[];
+  background: string;
+  point: string;
+  labelA: string;
+  labelB: string;
+  sideA: string;
+  sideB: string;
+  question: string;
+  optionA: string;
+  optionB: string;
+}
+
+export type CardCopyEdits = Partial<CardCopy>;
+
+/** 필터 칩에 쓰는 순서(전체는 UI에서 따로 붙입니다). */
+export const CATEGORY_ORDER: Category[] = ["work", "mz", "money", "tech", "culture"];
+
+/**
+ * 카테고리 색 — 두 벌을 둡니다.
+ *  color : 카드(캔버스)에 쓰는 밝은 색. 어두운 종이 위에서 읽히도록.
+ *  ui    : 화면(밝은 종이)에 쓰는 인쇄 잉크 톤. 흰 바탕에서 읽히도록.
+ */
+export const CATEGORY_META: Record<
+  Category,
+  { label: string; short: string; color: string; soft: string; ui: string; uiSoft: string }
+> = {
+  work: {
+    label: "직장·커리어",
+    short: "직장",
+    color: "#7EF0C0",
+    soft: "rgba(126, 240, 192, 0.16)",
+    ui: "#1d5c46",
+    uiSoft: "rgba(29, 92, 70, 0.1)",
+  },
+  mz: {
+    label: "MZ·트렌드",
+    short: "MZ",
+    color: "#C9A7FF",
+    soft: "rgba(201, 167, 255, 0.18)",
+    ui: "#5b3f96",
+    uiSoft: "rgba(91, 63, 150, 0.1)",
+  },
+  money: {
+    label: "소비·경제",
+    short: "소비",
+    color: "#FFC46B",
+    soft: "rgba(255, 196, 107, 0.16)",
+    ui: "#8a5a10",
+    uiSoft: "rgba(138, 90, 16, 0.1)",
+  },
+  tech: {
+    label: "테크·AI",
+    short: "테크",
+    color: "#8FB6FF",
+    soft: "rgba(143, 182, 255, 0.18)",
+    ui: "#2b4c8c",
+    uiSoft: "rgba(43, 76, 140, 0.1)",
+  },
+  culture: {
+    label: "문화·연예",
+    short: "문화",
+    color: "#FF9EC4",
+    soft: "rgba(255, 158, 196, 0.18)",
+    ui: "#9c2f57",
+    uiSoft: "rgba(156, 47, 87, 0.1)",
+  },
 };

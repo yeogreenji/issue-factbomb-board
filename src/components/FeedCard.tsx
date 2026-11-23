@@ -1,6 +1,8 @@
-import { ArrowUpRight } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowUpRight, Bookmark, Check } from "lucide-react";
 import { CATEGORY_META, type Issue, type PollSnapshot } from "../types";
 import { countLabel, percentOf, timeAgo } from "../lib/format";
+import { proxiedImage } from "../lib/api";
 import { TempGauge } from "./TempGauge";
 
 interface Props {
@@ -8,7 +10,44 @@ interface Props {
   index: number;
   poll: PollSnapshot | null;
   recommended?: boolean;
+  saved?: boolean;
+  published?: boolean;
   onOpen: (issue: Issue) => void;
+  onToggleSave?: (issue: Issue) => void;
+  onTogglePublished?: (issue: Issue) => void;
+}
+
+/**
+ * 기사 사진이 안 열리면 한 번은 같은 출처 프록시(/api/img)로 다시 시도합니다.
+ * 언론사가 이미지 핫링크·CORS를 막아도 카드가 빈 칸으로 남지 않습니다.
+ */
+function RetryImage({ src, className, onGiveUp }: { src: string; className?: string; onGiveUp?: () => void }) {
+  const [current, setCurrent] = useState(src);
+  const retried = useRef(false);
+
+  useEffect(() => {
+    setCurrent(src);
+    retried.current = false;
+  }, [src]);
+
+  return (
+    <img
+      className={className}
+      src={current}
+      alt=""
+      loading={className ? "eager" : "lazy"}
+      referrerPolicy="no-referrer"
+      onError={() => {
+        const viaProxy = proxiedImage(src);
+        if (!retried.current && viaProxy !== src) {
+          retried.current = true;
+          setCurrent(viaProxy);
+          return;
+        }
+        onGiveUp?.();
+      }}
+    />
+  );
 }
 
 /** 카드에서 바로 보이는 A/B — 이슈마다 문장이 다르다는 걸 목록에서 확인할 수 있게 합니다. */
@@ -60,7 +99,17 @@ function MiniVote({ poll }: { poll: PollSnapshot | null }) {
   );
 }
 
-export function FeedCard({ issue, index, poll, recommended, onOpen }: Props) {
+export function FeedCard({
+  issue,
+  index,
+  poll,
+  recommended,
+  saved,
+  published,
+  onOpen,
+  onToggleSave,
+  onTogglePublished,
+}: Props) {
   const meta = CATEGORY_META[issue.category];
   return (
     <article
@@ -68,7 +117,9 @@ export function FeedCard({ issue, index, poll, recommended, onOpen }: Props) {
       data-testid="feed-card"
       data-issue-id={issue.id}
       data-recommended={recommended ? "true" : "false"}
-      style={{ ["--accent" as string]: meta.color }}
+      data-saved={saved ? "true" : "false"}
+      data-published={published ? "true" : "false"}
+      style={{ ["--accent" as string]: meta.ui }}
     >
       <button
         type="button"
@@ -78,15 +129,11 @@ export function FeedCard({ issue, index, poll, recommended, onOpen }: Props) {
       >
         <span className="card-media">
           {issue.image ? (
-            <img
+            <RetryImage
               src={issue.image}
-              alt=""
-              loading="lazy"
-              referrerPolicy="no-referrer"
-              onError={(event) => {
-                const parent = event.currentTarget.parentElement;
-                if (parent) parent.classList.add("is-empty");
-                event.currentTarget.remove();
+              onGiveUp={() => {
+                const element = document.querySelector(`[data-issue-id="${issue.id}"] .card-media`);
+                element?.classList.add("is-empty");
               }}
             />
           ) : (
@@ -105,7 +152,8 @@ export function FeedCard({ issue, index, poll, recommended, onOpen }: Props) {
         <span className="card-body">
           <span className="card-meta">
             <span className="chip">{meta.label}</span>
-            {recommended && <span className="chip chip-pick">오늘 올릴 카드</span>}
+            {published && <span className="chip chip-done">발행 완료</span>}
+            {recommended && !published && <span className="chip chip-pick">오늘 올릴 카드</span>}
             <span className="card-src">
               {issue.source}
               <span className="dot" aria-hidden="true" />
@@ -127,6 +175,39 @@ export function FeedCard({ issue, index, poll, recommended, onOpen }: Props) {
           <MiniVote poll={poll} />
         </span>
       </button>
+
+      {(onToggleSave || onTogglePublished) && (
+        <div className="card-acts">
+          {onToggleSave && (
+            <button
+              type="button"
+              className="card-act"
+              data-on={saved ? "true" : "false"}
+              aria-pressed={Boolean(saved)}
+              aria-label={saved ? "저장함에서 빼기" : "저장함에 담기"}
+              title={saved ? "저장함에서 빼기" : "저장함에 담기"}
+              onClick={() => onToggleSave(issue)}
+              data-testid="toggle-save"
+            >
+              <Bookmark size={15} fill={saved ? "currentColor" : "none"} />
+            </button>
+          )}
+          {onTogglePublished && (
+            <button
+              type="button"
+              className="card-act is-done"
+              data-on={published ? "true" : "false"}
+              aria-pressed={Boolean(published)}
+              aria-label={published ? "발행 완료 취소" : "발행 완료로 표시"}
+              title={published ? "발행 완료 취소" : "발행 완료로 표시"}
+              onClick={() => onTogglePublished(issue)}
+              data-testid="toggle-published"
+            >
+              <Check size={15} strokeWidth={3} />
+            </button>
+          )}
+        </div>
+      )}
     </article>
   );
 }
@@ -139,17 +220,16 @@ export function HeroCard({ issue, poll, onOpen }: { issue: Issue; poll: PollSnap
       className="hero"
       data-testid="hero-card"
       data-issue-id={issue.id}
-      style={{ ["--accent" as string]: meta.color }}
+      style={{ ["--accent" as string]: meta.ui }}
     >
       <button type="button" className="hero-hit" onClick={() => onOpen(issue)} aria-label={`${issue.hook} — 오늘의 1위 카드뉴스 열기`}>
         {issue.image && (
-          <img
+          <RetryImage
             className="hero-img"
             src={issue.image}
-            alt=""
-            referrerPolicy="no-referrer"
-            onError={(event) => {
-              event.currentTarget.style.display = "none";
+            onGiveUp={() => {
+              const element = document.querySelector(`[data-issue-id="${issue.id}"] .hero-img`);
+              if (element instanceof HTMLElement) element.style.display = "none";
             }}
           />
         )}

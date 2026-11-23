@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Heart, MessageCircle, Send } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Heart, MessageCircle, Send, Sparkles } from "lucide-react";
 import type { Issue, PollSnapshot } from "../types";
 import { countLabel, percentOf, timeAgo } from "../lib/format";
 
@@ -15,11 +15,17 @@ interface Props {
 
 const MAX_CHARS = 220;
 
+/** 투표 직후 바로 던지는 한 줄 반응 — 빈 댓글창 대신 손끝으로 고를 수 있게. */
+const QUICK_REACTIONS = ["공감돼요", "좀 심하네요", "현실이에요", "반대예요"];
+
 export function Discussion({ issue, poll, voting, localOnly, onVote, onComment, onLike }: Props) {
   const [side, setSide] = useState<"a" | "b">(poll.my ?? "a");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<"all" | "a" | "b">("all");
+  const [reaction, setReaction] = useState("");
+  const [reactionBusy, setReactionBusy] = useState(false);
+  const reactionRef = useRef<HTMLInputElement>(null);
 
   const labelA = poll.a || issue.poll.a;
   const labelB = poll.b || issue.poll.b;
@@ -42,6 +48,16 @@ export function Discussion({ issue, poll, voting, localOnly, onVote, onComment, 
     if (ok) setText("");
   };
 
+  const submitReaction = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const value = reaction.trim();
+    if (value.length < 2 || !poll.my || reactionBusy) return;
+    setReactionBusy(true);
+    const ok = await onComment(poll.my, value);
+    setReactionBusy(false);
+    if (ok) setReaction("");
+  };
+
   return (
     <section className="discuss" data-testid="discussion" aria-label="투표와 토론">
       <div className="discuss-head">
@@ -62,6 +78,7 @@ export function Discussion({ issue, poll, voting, localOnly, onVote, onComment, 
           {(["a", "b"] as const).map((key) => {
             const pct = key === "a" ? pctA : pctB;
             const mine = poll.my === key;
+            const count = key === "a" ? poll.counts.a : poll.counts.b;
             return (
               <button
                 key={key}
@@ -80,9 +97,14 @@ export function Discussion({ issue, poll, voting, localOnly, onVote, onComment, 
                 </span>
                 <span className="dlg-label">{key === "a" ? labelA : labelB}</span>
                 {poll.my && (
-                  <span className="dlg-pct" data-testid={`result-${key}`}>
-                    {pct}%
-                  </span>
+                  <>
+                    <span className="dlg-num" data-testid={`count-${key}`}>
+                      {count}표
+                    </span>
+                    <span className="dlg-pct" data-testid={`result-${key}`}>
+                      {pct}%
+                    </span>
+                  </>
                 )}
               </button>
             );
@@ -91,8 +113,45 @@ export function Discussion({ issue, poll, voting, localOnly, onVote, onComment, 
 
         <p className="dlg-foot" aria-live="polite">
           {poll.total > 0 ? `${countLabel(poll.total)}명 참여` : "첫 표를 남겨 보세요"}
-          {poll.my ? " · 다시 누르면 바뀝니다" : ""}
+          {poll.my ? " · 다시 누르면 바뀝니다" : " · 누르면 바로 집계"}
         </p>
+
+        {poll.my && (
+          <form className="dlg-react" onSubmit={submitReaction} data-testid="reaction-form">
+            <p className="dlg-react-title">
+              <Sparkles size={13} /> 내 선택({poll.my.toUpperCase()})에 한 줄
+            </p>
+            <div className="dlg-react-chips">
+              {QUICK_REACTIONS.map((quick, i) => (
+                <button
+                  key={quick}
+                  type="button"
+                  onClick={() => {
+                    setReaction(quick);
+                    reactionRef.current?.focus();
+                  }}
+                  data-testid={`reaction-chip-${i + 1}`}
+                >
+                  {quick}
+                </button>
+              ))}
+            </div>
+            <div className="dlg-react-row">
+              <input
+                ref={reactionRef}
+                value={reaction}
+                onChange={(event) => setReaction(event.target.value.slice(0, 80))}
+                placeholder="왜 그렇게 골랐는지 한 줄 (선택)"
+                aria-label="투표 한 줄 반응"
+                maxLength={80}
+                data-testid="reaction-input"
+              />
+              <button type="submit" disabled={reactionBusy || reaction.trim().length < 2} data-testid="reaction-submit">
+                <Send size={14} />
+              </button>
+            </div>
+          </form>
+        )}
       </div>
 
       <form className="talk-form" onSubmit={submit} data-testid="comment-form">
