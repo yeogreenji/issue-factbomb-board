@@ -18,6 +18,7 @@ import { CATEGORY_META, type Issue } from "../types";
 import { timeAgo } from "./format";
 import { buildZip } from "./zip";
 import { proxiedImage } from "./api";
+import { headlineStat, layoutOf, type CardLayout } from "./layout";
 import {
   CARD_THEMES,
   DEFAULT_THEME,
@@ -49,6 +50,8 @@ export interface RenderOptions {
   theme?: CardThemeId | string;
   /** 카드마다 박히는 워터마크(@my_channel). 비우면 서비스 이름. */
   handle?: string;
+  /** 표지 판(레이아웃) — 지정하지 않으면 이슈 성격으로 고릅니다. */
+  layout?: CardLayout;
 }
 
 function useOptions(options: RenderOptions = {}): void {
@@ -482,7 +485,7 @@ function categoryChip(ctx: Ctx, issue: Issue, accent: string, x: number, y: numb
 
 /* ------------------------------------------------------------------ slide 1 */
 
-function drawCover(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
+function drawCoverOverlay(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
   posterBase(ctx, accent);
   if (img) {
     drawPhoto(ctx, img, 0, 0, CARD_W, CARD_H, 0, 0.34);
@@ -564,7 +567,273 @@ function drawCover(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement
   themeChrome(ctx);
 }
 
+
+/* ------------------------------------------------------- 표지 레이아웃 5종 */
+
+/** 사진 위에 어두운 막을 깔아 글자가 항상 읽히게 합니다. */
+function veil(ctx: Ctx, strength = 0.5): void {
+  ctx.fillStyle = isLight(P.paper) ? `rgba(10,9,7,${strength})` : `rgba(8,8,10,${strength})`;
+  ctx.fillRect(0, 0, CARD_W, CARD_H);
+}
+
+function coverFoot(ctx: Ctx, issue: Issue, mode: Surface, note: string): void {
+  const footY = CARD_H - 150;
+  ctx.strokeStyle = alpha(surfaceInk(mode), 0.24);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(M, footY);
+  ctx.lineTo(CARD_W - M, footY);
+  ctx.stroke();
+
+  setFont(ctx, 700, 27);
+  ctx.fillStyle = alpha(surfaceInk(mode), 0.74);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(`${issue.source} · ${timeAgo(issue.publishedAt)}`, M, footY + 22);
+
+  setFont(ctx, 800, 27);
+  ctx.fillStyle = P.accentText;
+  ctx.textAlign = "right";
+  ctx.fillText(note, CARD_W - M, footY + 22);
+  ctx.textAlign = "left";
+  footer(ctx, 0, mode);
+}
+
+/** ② 한마디 — 인용 한 문장을 표지의 주인공으로. */
+function drawCoverQuote(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
+  posterBase(ctx, accent);
+  if (img) {
+    drawPhoto(ctx, img, 0, 0, CARD_W, CARD_H, 0, 0.28);
+    veil(ctx, 0.5);
+  }
+  topScrim(ctx, 280);
+  bottomScrim(ctx, 900, 0.92);
+
+  brandTop(ctx, "photo");
+  hotBadge(ctx, issue);
+  categoryChip(ctx, issue, accent, M, 160);
+
+  setFont(ctx, 900, 210, '"Noto Serif KR", "Nanum Myeongjo", Georgia, serif');
+  ctx.fillStyle = P.accentText;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText("\u201c", M - 6, 214);
+
+  const quote = issue.point || issue.kicker || issue.hook;
+  const fit = fitHeading(ctx, quote, CARD_W - M * 2, 5, 106, 54, 900);
+  setFont(ctx, 900, fit.size);
+  const lineH = fit.size * 1.26;
+  const blockH = fit.lines.length * lineH;
+  const top = Math.max(470, Math.min(760, CARD_H * 0.44 - blockH / 2));
+  ctx.shadowColor = "rgba(0,0,0,0.45)";
+  ctx.shadowBlur = 22;
+  ctx.fillStyle = P.photoInk;
+  drawLines(ctx, fit.lines, M, top, lineH);
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+
+  const ruleY = top + blockH + 46;
+  ctx.fillStyle = P.accentText;
+  ctx.fillRect(M, ruleY, 168, 10);
+
+  const sub = fitHeading(ctx, issue.hook, CARD_W - M * 2, 3, 46, 30, 700);
+  setFont(ctx, 700, sub.size);
+  ctx.fillStyle = alpha(P.photoInk, 0.86);
+  drawLines(ctx, sub.lines, M, ruleY + 40, sub.size * 1.36);
+
+  coverFoot(ctx, issue, "photo", "넘겨서 팩트 3줄 →");
+  themeChrome(ctx);
+}
+
+/** ③ 숫자 — 기사에서 가장 센 수치 하나를 거대하게. */
+function drawCoverStat(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
+  posterBase(ctx, accent);
+  const bandH = 660;
+  if (img) {
+    drawPhoto(ctx, img, 0, 0, CARD_W, bandH, 0, 0.34);
+    ctx.fillStyle = hexWith(accent, isLight(P.paper) ? "1c" : "2c");
+    ctx.fillRect(0, 0, CARD_W, bandH);
+  }
+  topScrim(ctx, 300);
+  const fade = ctx.createLinearGradient(0, bandH - 220, 0, bandH);
+  fade.addColorStop(0, "rgba(0,0,0,0)");
+  fade.addColorStop(1, P.paper);
+  ctx.fillStyle = fade;
+  ctx.fillRect(0, bandH - 220, CARD_W, 220);
+
+  brandTop(ctx, "photo");
+  hotBadge(ctx, issue);
+  categoryChip(ctx, issue, accent, M, 150);
+
+  const heading = fitHeading(ctx, issue.hook, CARD_W - M * 2, 3, 72, 46, 900);
+  setFont(ctx, 900, heading.size);
+  const hookH = heading.lines.length * heading.size * 1.16;
+  ctx.fillStyle = P.photoInk;
+  drawLines(ctx, heading.lines, M, bandH - 90 - hookH, heading.size * 1.16);
+
+  const stat = headlineStat(issue);
+  const blockTop = bandH + 34;
+  const blockH = CARD_H - 300 - blockTop;
+  fillRound(ctx, M, blockTop, CARD_W - M * 2, blockH, 34, P.accent);
+  strokeRound(ctx, M, blockTop, CARD_W - M * 2, blockH, 34, alpha(P.onAccent, 0.16), 2);
+
+  if (stat) {
+    setFont(ctx, 900, 268);
+    const valueWidth = ctx.measureText(stat.value).width;
+    ctx.fillStyle = P.onAccent;
+    ctx.fillText(stat.value, M + 52, blockTop + 46);
+    setFont(ctx, 900, 92);
+    ctx.fillText(stat.unit, M + 56 + valueWidth, blockTop + 214);
+  } else {
+    setFont(ctx, 900, 96);
+    ctx.fillStyle = alpha(P.onAccent, 0.35);
+    ctx.fillText("오늘의 숫자", M + 52, blockTop + 52);
+  }
+
+  const context = fitHeading(ctx, issue.kicker || issue.hook, CARD_W - M * 2 - 104, 3, 44, 30, 700);
+  setFont(ctx, 700, context.size);
+  ctx.fillStyle = alpha(P.onAccent, 0.92);
+  drawLines(ctx, context.lines, M + 52, blockTop + blockH - 60 - context.lines.length * context.size * 1.34, context.size * 1.34);
+
+  coverFoot(ctx, issue, "paper", "숫자로 보기 →");
+  themeChrome(ctx);
+}
+
+/** ④ A vs B — 화면을 갈라 두 진영을 나란히. */
+function drawCoverSplit(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
+  posterBase(ctx, accent);
+  if (img) {
+    drawPhoto(ctx, img, 0, 0, CARD_W, CARD_H, 0, 0.3);
+    veil(ctx, 0.58);
+  }
+  topScrim(ctx, 320);
+  brandTop(ctx, "photo");
+  hotBadge(ctx, issue);
+  categoryChip(ctx, issue, accent, M, 158);
+
+  const heading = fitHeading(ctx, issue.hook, CARD_W - M * 2, 3, 80, 48, 900);
+  setFont(ctx, 900, heading.size);
+  ctx.fillStyle = P.photoInk;
+  ctx.shadowColor = "rgba(0,0,0,0.45)";
+  ctx.shadowBlur = 20;
+  drawLines(ctx, heading.lines, M, 246, heading.size * 1.14);
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+
+  const sides = issue.sides;
+  const optionA = sides?.a || issue.poll.a;
+  const optionB = sides?.b || issue.poll.b;
+  const labelA = sides?.labelA || "A";
+  const labelB = sides?.labelB || "B";
+
+  const panelTop = 600;
+  const panelH = CARD_H - 280 - panelTop;
+  const gap = 16;
+  const pw = (CARD_W - M * 2 - gap) / 2;
+
+  const drawPanel = (x: number, fill: string, ink: string, label: string, text: string) => {
+    fillRound(ctx, x, panelTop, pw, panelH, 28, fill);
+    setFont(ctx, 900, 34);
+    ctx.fillStyle = alpha(ink, 0.72);
+    ctx.fillText(label, x + 32, panelTop + 30);
+    const fit = fitHeading(ctx, text, pw - 64, 5, 46, 30, 900);
+    setFont(ctx, 900, fit.size);
+    ctx.fillStyle = ink;
+    drawLines(ctx, fit.lines, x + 32, panelTop + 92, fit.size * 1.34);
+  };
+
+  drawPanel(M, P.accent, P.onAccent, sides?.labelA ? `A · ${labelA}` : "A", optionA);
+  drawPanel(M + pw + gap, P.alt, P.onAlt, sides?.labelB ? `B · ${labelB}` : "B", optionB);
+
+  const vsY = panelTop + panelH / 2;
+  ctx.fillStyle = P.solid;
+  ctx.beginPath();
+  ctx.arc(CARD_W / 2, vsY, 54, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = P.accentText;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(CARD_W / 2, vsY, 54, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = P.onSolid;
+  setFont(ctx, 900, 32);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("VS", CARD_W / 2, vsY + 2);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+
+  coverFoot(ctx, issue, "photo", "당신은 어느 쪽? →");
+  themeChrome(ctx);
+}
+
+/** ⑤ 속보 — 붉은 띠와 큰 활자로 지금 터진 느낌. */
+function drawCoverBreaking(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
+  posterBase(ctx, accent);
+  const bandH = 780;
+  if (img) {
+    drawPhoto(ctx, img, 0, 0, CARD_W, bandH, 0, 0.36);
+    ctx.fillStyle = "rgba(120,8,6,0.32)";
+    ctx.fillRect(0, 0, CARD_W, bandH);
+  }
+  topScrim(ctx, 260);
+  const fade = ctx.createLinearGradient(0, bandH - 200, 0, bandH);
+  fade.addColorStop(0, "rgba(0,0,0,0)");
+  fade.addColorStop(1, P.paper);
+  ctx.fillStyle = fade;
+  ctx.fillRect(0, bandH - 200, CARD_W, 200);
+
+  const stripTop = 54;
+  fillRound(ctx, M, stripTop, 250, 58, 8, P.alt);
+  setFont(ctx, 900, 30);
+  ctx.fillStyle = P.onAlt;
+  ctx.textBaseline = "middle";
+  ctx.fillText("속보 · HOT", M + 26, stripTop + 31);
+  ctx.textBaseline = "top";
+
+  setFont(ctx, 800, 26);
+  ctx.fillStyle = alpha(P.photoInk, 0.86);
+  ctx.fillText(brandName(), M + 274, stripTop + 16);
+
+  hotBadge(ctx, issue, CARD_W - M, stripTop);
+  categoryChip(ctx, issue, accent, M, 140);
+
+  const heading = fitHeading(ctx, issue.hook, CARD_W - M * 2, 4, 108, 58, 900);
+  setFont(ctx, 900, heading.size);
+  const lineH = heading.size * 1.1;
+  const blockH = heading.lines.length * lineH;
+  const top = bandH - 110 - blockH;
+  ctx.shadowColor = "rgba(0,0,0,0.5)";
+  ctx.shadowBlur = 26;
+  ctx.fillStyle = P.photoInk;
+  drawLines(ctx, heading.lines, M, top, lineH);
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+
+  const kicker = fitHeading(ctx, issue.kicker || issue.point, CARD_W - M * 2, 2, 40, 28, 700);
+  setFont(ctx, 700, kicker.size);
+  ctx.fillStyle = alpha(P.photoInk, 0.86);
+  drawLines(ctx, kicker.lines, M, bandH + 46, kicker.size * 1.4);
+
+  ctx.fillStyle = P.accentText;
+  ctx.fillRect(M, bandH + 46 + kicker.lines.length * kicker.size * 1.4 + 18, 132, 8);
+
+  coverFoot(ctx, issue, "paper", "전체 팩트 →");
+  themeChrome(ctx);
+}
+
+/** 표지 레이아웃 선택 — 이슈마다 다른 판으로 그립니다. */
+function drawCover(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null, layout?: CardLayout): void {
+  const picked = layout ?? layoutOf(issue);
+  if (picked === "quote") drawCoverQuote(ctx, issue, accent, img);
+  else if (picked === "stat") drawCoverStat(ctx, issue, accent, img);
+  else if (picked === "split") drawCoverSplit(ctx, issue, accent, img);
+  else if (picked === "breaking") drawCoverBreaking(ctx, issue, accent, img);
+  else drawCoverOverlay(ctx, issue, accent, img);
+}
+
 /* ------------------------------------------------------------------ slide 2 */
+
 
 function drawFacts(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
   posterBase(ctx, accent);
@@ -1108,7 +1377,7 @@ export async function renderSlide(issue: Issue, index: number, options: RenderOp
   ctx.textBaseline = "top";
   ctx.textAlign = "left";
 
-  if (index === 0) drawCover(ctx, issue, meta.color, img);
+  if (index === 0) drawCover(ctx, issue, meta.color, img, options.layout);
   else if (index === 1) drawFacts(ctx, issue, meta.color, img);
   else if (index === 2) drawWhy(ctx, issue, meta.color, img);
   else if (index === 3) drawSides(ctx, issue, meta.color);

@@ -37,8 +37,8 @@ import { buildPoll, isBlandPoll } from "./debate.js";
 
 export const config = { maxDuration: 60 };
 
-type Category = "work" | "mz" | "money" | "tech" | "culture";
-const CATEGORIES: Category[] = ["work", "mz", "money", "tech", "culture"];
+type Category = "entertainment" | "society" | "culture" | "tech" | "money" | "work";
+const CATEGORIES: Category[] = ["entertainment", "society", "culture", "tech", "money", "work"];
 
 const MIN_TEXT_CHARS = 12;
 const MAX_TEXT_CHARS = 6_000;
@@ -65,7 +65,7 @@ const SYSTEM_PROMPT = `당신은 20~30대가 실제로 반응하는 뉴스를 �
   · 금지: "찬성/반대", "이해된다/아니다", "어떻게 보시나요", "영향 있나요", "이미 체감 중", "아직 남 일".
   · 예: "소비자 기만, 즉시 불매" / "원가 상승 불가피, 기업 옹호".
 - temp: 지금 여론이 달아오른 정도 0~100 정수(사과·철회·논란·품절은 70 이상, 단순 발표는 30~50).
-- category: work | mz | money | tech | culture 중 하나.
+- category: entertainment | society | culture | tech | money | work 중 하나.
 - tags: 검색 키워드 3개(# 없이).
 
 출력은 아래 스키마의 JSON 객체 하나뿐입니다. 코드블록·설명을 붙이지 마세요.
@@ -105,7 +105,7 @@ function fallbackCard(input: { title: string; source: string; url: string; body:
   const title = input.title || clean(input.body, 80);
   return {
     id: shortId(input.url || input.title),
-    category: "mz",
+    category: "society",
     title,
     source: input.source,
     url: input.url,
@@ -117,7 +117,7 @@ function fallbackCard(input: { title: string; source: string; url: string; body:
     background: sentencesPool.slice(3, 5).join(" "),
     point: "",
     sides: null,
-    poll: buildPoll({ title, summary: input.body.slice(0, 300), body: input.body, category: "mz" }),
+    poll: buildPoll({ title, summary: input.body.slice(0, 300), body: input.body, category: "society" }),
     temp: null,
     tags: [],
     ai: false,
@@ -143,7 +143,7 @@ function normalizeCard(raw: unknown, base: { title: string; source: string; url:
 
   return {
     id: shortId(base.url || base.title),
-    category: CATEGORIES.includes(categoryRaw) ? categoryRaw : "mz",
+    category: CATEGORIES.includes(categoryRaw) ? categoryRaw : "society",
     title: base.title || hook,
     source: base.source,
     url: base.url,

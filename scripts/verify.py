@@ -37,6 +37,10 @@ ROOT = Path(__file__).resolve().parent.parent
 SHOTS = ROOT / "docs" / "screenshots"
 NODE_BIN = "/workspace/.tools/node-v22.12.0-linux-x64/bin"
 LIBS = "/workspace/.libs/usr/lib/x86_64-linux-gnu"
+# 프로세스/스레드 한도가 낮은 컨테이너에서는 VERIFY_SINGLE_PROCESS=1 로 크로미움을 한 프로세스로 띄웁니다.
+LAUNCH_ARGS = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--in-process-gpu"]
+if os.environ.get("VERIFY_SINGLE_PROCESS") == "1":
+    LAUNCH_ARGS += ["--single-process", "--no-zygote"]
 
 ENV = os.environ.copy()
 if Path(NODE_BIN).exists():
@@ -114,29 +118,43 @@ def start_server(
     feeds: str = "on",
     allow_local: str = "on",
 ):
-    free_port(port)
     log_path = ROOT / ".tmp" / f"serve-{port}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log = open(log_path, "w")
-    proc = subprocess.Popen(
-        [
-            "node",
-            "scripts/serve.mjs",
-            f"--port={port}",
-            f"--dist={dist}",
-            f"--api={api}",
-            f"--store={store}",
-            f"--ai={ai}",
-            f"--feeds={feeds}",
-            f"--allow-local={allow_local}",
-        ],
-        cwd=ROOT,
-        env=ENV,
-        stdout=log,
-        stderr=subprocess.STDOUT,
-    )
-    wait_port(port)
-    return proc, log
+    last_error: Exception | None = None
+    # 스레드 한도가 낮은 컨테이너에서는 node 가 간혹 뜨지 못합니다 — 두 번까지 다시 띄웁니다.
+    for attempt in range(3):
+        free_port(port)
+        log = open(log_path, "w")
+        proc = subprocess.Popen(
+            [
+                "node",
+                "scripts/serve.mjs",
+                f"--port={port}",
+                f"--dist={dist}",
+                f"--api={api}",
+                f"--store={store}",
+                f"--ai={ai}",
+                f"--feeds={feeds}",
+                f"--allow-local={allow_local}",
+            ],
+            cwd=ROOT,
+            env=ENV,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            wait_port(port, timeout=25.0)
+            return proc, log
+        except Exception as error:  # noqa: BLE001 - 재시도 후 마지막 오류만 올립니다
+            last_error = error
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+            log.close()
+            time.sleep(2.0 + attempt * 3.0)
+    raise RuntimeError(f"서버가 {port} 포트에서 뜨지 않았습니다") from last_error
 
 
 def stop_server(proc) -> None:
@@ -341,6 +359,40 @@ def scenario_mobile(base: str, browser):
     teaser_texts = [teasers.nth(i).inner_text().strip() for i in range(teasers.count())]
     check("A: 목록에서 A/B 문항이 바로 보임", len(teaser_texts) >= 3 and all(len(t) >= 8 for t in teaser_texts), str(teaser_texts)[:120])
     check("A: 카드마다 투표 문항이 다름", len(set(teaser_texts)) == len(teaser_texts), str(teaser_texts)[:160])
+
+    # 첫 화면 썸네일 — 사진이 없거나 실패해도 카드마다 이미지가 실제로 그려져야 합니다.
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    settle(page, 1800)
+    page.evaluate("window.scrollTo(0, 0)")
+    settle(page, 500)
+    thumb_report = page.evaluate(
+        """() => [...document.querySelectorAll('[data-testid="feed-card"] .card-media img, [data-testid="hero-card"] .hero-img')]
+             .map(img => ({ ok: img.complete && img.naturalWidth > 0, w: img.naturalWidth, h: img.naturalHeight,
+                            kind: img.dataset.thumb || '', id: img.closest('[data-issue-id]')?.dataset.issueId }))"""
+    )
+    feed_count = page.locator('[data-testid="feed-card"]').count()
+    broken = [t for t in thumb_report if not t["ok"]]
+    check(
+        "A: 첫 화면 카드마다 썸네일 이미지가 실제로 그려짐(img.complete && naturalWidth>0)",
+        len(thumb_report) >= feed_count + 1 and not broken,
+        f"{len(thumb_report)}장 / 카드 {feed_count} · 깨짐 {broken}",
+    )
+    check(
+        "A: 썸네일이 글자가 아닌 실제 이미지 해상도",
+        all(t["w"] >= 200 and t["h"] >= 120 for t in thumb_report if t["ok"]),
+        str([(t["w"], t["h"]) for t in thumb_report])[:140],
+    )
+    check(
+        "A: 사진 없는 카드도 표지 이미지로 채워짐(빈 칸 없음)",
+        page.locator(".card-media-fallback").count() == 0,
+        str(page.locator(".card-media-fallback").count()),
+    )
+    layouts = page.evaluate("() => [...document.querySelectorAll('[data-testid=\"feed-card\"]')].map(c => c.dataset.layout)")
+    check("A: 카드 디자인이 한 판으로 겹치지 않음(3종 이상)", len(set(layouts)) >= 3, str(layouts))
+    card_cats = page.evaluate(
+        """() => [...document.querySelectorAll('[data-testid="feed-card"] .card-meta .chip:first-child, [data-testid="hero-card"] .chip-onDark')].map(e => e.textContent.trim())"""
+    )
+    check("A: 연예·사회·문화·테크·경제·직장이 고루 섞임(4종 이상)", len(set(card_cats)) >= 4, str(card_cats))
 
     strip = page.locator(".live-strip").inner_text()
     check("A: 수집 시각·건수·AI 상태 노출", "기준" in strip and "이슈" in strip and "AI" in strip, strip)
@@ -799,7 +851,7 @@ def scenario_creator(base: str, browser):
     settle(page, 400)
 
     # 2) 카테고리 필터 — 지금 목록에 실제로 있는 카테고리로 좁혀 봅니다.
-    CATEGORY_KEYS = {"직장·커리어": "work", "MZ·트렌드": "mz", "소비·경제": "money", "테크·AI": "tech", "문화·연예": "culture"}
+    CATEGORY_KEYS = {"연예": "entertainment", "사회": "society", "문화·라이프": "culture", "테크·AI": "tech", "경제·소비": "money", "직장·커리어": "work"}
     first_cat = page.evaluate(
         "() => document.querySelector('[data-testid=\"feed-card\"] .card-meta .chip').textContent.trim()"
     )
@@ -923,6 +975,15 @@ def scenario_creator(base: str, browser):
         "() => { const r = document.querySelector('.live-card-frame').getBoundingClientRect(); return Math.round((r.width / r.height) * 1000) / 1000; }"
     )
     check("G: 미리보기 프레임 4:5", abs(ratio - 0.8) < 0.03, str(ratio))
+    # 표지는 캔버스로 비동기로 그려집니다 — 그리드가 채워질 때까지 기다립니다.
+    try:
+        page.wait_for_function(
+            "() => document.querySelectorAll('[data-testid=\"feed-grid-preview\"] .grid-cell img').length >= 4",
+            timeout=25000,
+        )
+    except Exception:
+        pass
+    settle(page, 500)
     grid = page.evaluate(
         """() => {
             const root = document.querySelector('[data-testid="feed-grid-preview"]');
@@ -1156,7 +1217,37 @@ def api_checks(port: int):
         ),
         str([(i.get("hook"), len(i.get("facts") or [])) for i in issues])[:180],
     )
-    check("API: 카테고리 값이 정해진 5종", {issue["category"] for issue in issues} <= {"work", "mz", "money", "tech", "culture"})
+    check(
+        "API: 카테고리 값이 정해진 6종",
+        {issue["category"] for issue in issues} <= {"entertainment", "society", "culture", "tech", "money", "work"},
+        str({issue["category"] for issue in issues}),
+    )
+    check(
+        "API: 장르가 한쪽에 몰리지 않음(4종 이상)",
+        len({issue["category"] for issue in issues}) >= 4,
+        str(sorted({issue["category"] for issue in issues})),
+    )
+    POLITICS = re.compile(r"대통령|대통령실|청와대|국회|여당|야당|장관|검찰|탄핵|공소|특검|선거|공천|민주당|국민의힘|계엄")
+    stray = [issue["title"] for issue in issues if POLITICS.search(issue["title"])]
+    check("API: 정치·정부 공격 기사가 섞이지 않음", not stray, str(stray)[:160])
+    hooks = [issue.get("hook", "") for issue in issues]
+    check("API: 카드마다 헤드라인이 다름", len(set(hooks)) == len(hooks), str(hooks)[:160])
+    fact_owner = {}
+    dup_facts = []
+    for issue in issues:
+        for fact in issue.get("facts") or []:
+            key = re.sub(r"[^가-힣a-zA-Z0-9]", "", fact)[:40]
+            if not key:
+                continue
+            if key in fact_owner and fact_owner[key] != issue["id"]:
+                dup_facts.append(fact[:40])
+            fact_owner[key] = issue["id"]
+    check("API: 팩트 문장이 카드끼리 복사되지 않음", not dup_facts, str(dup_facts)[:160])
+    check(
+        "API: 카드마다 팩트 2줄 이상",
+        all(len(issue.get("facts") or []) >= 2 for issue in issues),
+        str([(issue.get("hook"), len(issue.get("facts") or [])) for issue in issues])[:180],
+    )
     check("API: 온도 0~100", all(isinstance(issue.get("temp"), int) and 0 <= issue["temp"] <= 100 for issue in issues))
     check(
         "API: 카드마다 화제성 점수(0~99)",
@@ -1299,7 +1390,7 @@ def main() -> int:
         servers.append(start_server(port_s, dist="dist", api="on", store="memory", ai="off", feeds="on", allow_local="off"))
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--in-process-gpu"])
+            browser = p.chromium.launch(args=LAUNCH_ARGS)
             try:
                 print("== A: 모바일 흐름 ==")
                 hook = scenario_mobile(f"http://127.0.0.1:{port_a}/", browser)
@@ -1308,7 +1399,7 @@ def main() -> int:
             finally:
                 browser.close()
 
-            browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--in-process-gpu"])
+            browser = p.chromium.launch(args=LAUNCH_ARGS)
             try:
                 print("== C: 뉴스로 만들기 ==")
                 scenario_briefing(f"http://127.0.0.1:{port_a}/", browser, port_a)
@@ -1321,7 +1412,7 @@ def main() -> int:
             finally:
                 browser.close()
 
-            browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--in-process-gpu"])
+            browser = p.chromium.launch(args=LAUNCH_ARGS)
             try:
                 print("== D: AI 키 없음 ==")
                 scenario_headline_only(port_d, browser)

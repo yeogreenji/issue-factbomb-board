@@ -1,6 +1,6 @@
 /** 앱 전체가 쓰는 데이터 모양. 서버(api/_shared, api/trending, api/briefing)와 같은 이름을 씁니다. */
 
-export type Category = "work" | "mz" | "money" | "tech" | "culture";
+export type Category = "entertainment" | "society" | "culture" | "tech" | "money" | "work";
 
 export interface IssuePoll {
   question: string;
@@ -124,7 +124,7 @@ export interface CardCopy {
 export type CardCopyEdits = Partial<CardCopy>;
 
 /** 필터 칩에 쓰는 순서(전체는 UI에서 따로 붙입니다). */
-export const CATEGORY_ORDER: Category[] = ["work", "mz", "money", "tech", "culture"];
+export const CATEGORY_ORDER: Category[] = ["entertainment", "society", "culture", "tech", "money", "work"];
 
 /**
  * 카테고리 색 — 두 벌을 둡니다.
@@ -135,29 +135,29 @@ export const CATEGORY_META: Record<
   Category,
   { label: string; short: string; color: string; soft: string; ui: string; uiSoft: string }
 > = {
-  work: {
-    label: "직장·커리어",
-    short: "직장",
-    color: "#7EF0C0",
-    soft: "rgba(126, 240, 192, 0.16)",
-    ui: "#1d5c46",
-    uiSoft: "rgba(29, 92, 70, 0.1)",
+  entertainment: {
+    label: "연예",
+    short: "연예",
+    color: "#FF6E9C",
+    soft: "rgba(255, 110, 156, 0.18)",
+    ui: "#b3195c",
+    uiSoft: "rgba(179, 25, 92, 0.1)",
   },
-  mz: {
-    label: "MZ·트렌드",
-    short: "MZ",
+  society: {
+    label: "사회",
+    short: "사회",
+    color: "#5FD3F3",
+    soft: "rgba(95, 211, 243, 0.18)",
+    ui: "#136479",
+    uiSoft: "rgba(19, 100, 121, 0.1)",
+  },
+  culture: {
+    label: "문화·라이프",
+    short: "문화",
     color: "#C9A7FF",
     soft: "rgba(201, 167, 255, 0.18)",
     ui: "#5b3f96",
     uiSoft: "rgba(91, 63, 150, 0.1)",
-  },
-  money: {
-    label: "소비·경제",
-    short: "소비",
-    color: "#FFC46B",
-    soft: "rgba(255, 196, 107, 0.16)",
-    ui: "#8a5a10",
-    uiSoft: "rgba(138, 90, 16, 0.1)",
   },
   tech: {
     label: "테크·AI",
@@ -167,12 +167,20 @@ export const CATEGORY_META: Record<
     ui: "#2b4c8c",
     uiSoft: "rgba(43, 76, 140, 0.1)",
   },
-  culture: {
-    label: "문화·연예",
-    short: "문화",
-    color: "#FF9EC4",
-    soft: "rgba(255, 158, 196, 0.18)",
-    ui: "#9c2f57",
-    uiSoft: "rgba(156, 47, 87, 0.1)",
+  money: {
+    label: "경제·소비",
+    short: "경제",
+    color: "#FFC46B",
+    soft: "rgba(255, 196, 107, 0.16)",
+    ui: "#8a5a10",
+    uiSoft: "rgba(138, 90, 16, 0.1)",
+  },
+  work: {
+    label: "직장·커리어",
+    short: "직장",
+    color: "#7EF0C0",
+    soft: "rgba(126, 240, 192, 0.16)",
+    ui: "#1d5c46",
+    uiSoft: "rgba(29, 92, 70, 0.1)",
   },
 };

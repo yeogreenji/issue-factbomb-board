@@ -40,6 +40,7 @@ import {
   type VercelResponse,
 } from "./_shared.js";
 import { buildPoll, ensureDistinctPolls } from "./debate.js";
+import { composeEditorial } from "./editorial.js";
 
 export const config = { maxDuration: 60 };
 
@@ -53,10 +54,10 @@ const FEED_TIMEOUT_MS = 8_000;
 const MAX_ITEMS_PER_FEED = 40;
 const MAX_AGE_HOURS = 26;
 const CANDIDATE_LIMIT = 20;
-const CARD_LIMIT = 6;
+const CARD_LIMIT = 8;
 
-export type Category = "work" | "mz" | "money" | "tech" | "culture";
-const CATEGORIES: Category[] = ["work", "mz", "money", "tech", "culture"];
+export type Category = "entertainment" | "society" | "culture" | "tech" | "money" | "work";
+const CATEGORIES: Category[] = ["entertainment", "society", "culture", "tech", "money", "work"];
 
 export interface IssuePoll {
   question: string;
@@ -120,25 +121,28 @@ interface Feed {
  * 한 곳이 막혀도 나머지로 계속 갑니다 — 어느 피드가 살아 있는지는 응답의 feeds 에 그대로 나갑니다.
  */
 const FEEDS: Feed[] = [
-  { name: "연합뉴스 종합", slug: "yna-news", source: "연합뉴스", url: "https://www.yna.co.kr/rss/news.xml", hint: "mz" },
-  { name: "연합뉴스 경제", slug: "yna-economy", source: "연합뉴스", url: "https://www.yna.co.kr/rss/economy.xml", hint: "money" },
-  { name: "연합뉴스 산업", slug: "yna-industry", source: "연합뉴스", url: "https://www.yna.co.kr/rss/industry.xml", hint: "tech" },
+  // 연예 — 인스타에서 가장 잘 도는 사진·소식. 카드뉴스의 앞자리를 채웁니다.
+  { name: "연합뉴스 연예", slug: "yna-ent", source: "연합뉴스", url: "https://www.yna.co.kr/rss/entertainment.xml", hint: "entertainment" },
+  { name: "톱스타뉴스", slug: "topstar", source: "톱스타뉴스", url: "https://www.topstarnews.net/rss/allArticle.xml", hint: "entertainment" },
+  // 사회 — 사건·사고·생활. 정치 기사는 후보에서 걸러 냅니다.
+  { name: "연합뉴스 사회", slug: "yna-society", source: "연합뉴스", url: "https://www.yna.co.kr/rss/society.xml", hint: "society" },
+  { name: "SBS 사회", slug: "sbs-society", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=03", hint: "society" },
+  { name: "SBS 뉴스", slug: "sbs", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=01", hint: "society" },
+  { name: "연합뉴스 종합", slug: "yna-news", source: "연합뉴스", url: "https://www.yna.co.kr/rss/news.xml", hint: "society" },
+  { name: "경향신문", slug: "khan", source: "경향신문", url: "https://www.khan.co.kr/rss/rssdata/total_news.xml", hint: "society" },
+  { name: "동아일보", slug: "donga", source: "동아일보", url: "https://rss.donga.com/total.xml", hint: "society" },
+  { name: "오마이뉴스", slug: "ohmynews", source: "오마이뉴스", url: "https://rss.ohmynews.com/rss/ohmynews.xml", hint: "society" },
+  { name: "조선일보", slug: "chosun", source: "조선일보", url: "https://www.chosun.com/arc/outboundfeeds/rss/?outputType=xml", hint: "society" },
+  // 문화·라이프 — 영화·드라마·전시·여행·건강.
   { name: "연합뉴스 문화", slug: "yna-culture", source: "연합뉴스", url: "https://www.yna.co.kr/rss/culture.xml", hint: "culture" },
-  { name: "연합뉴스 정치", slug: "yna-politics", source: "연합뉴스", url: "https://www.yna.co.kr/rss/politics.xml", hint: "work" },
-  { name: "경향신문", slug: "khan", source: "경향신문", url: "https://www.khan.co.kr/rss/rssdata/total_news.xml", hint: "mz" },
-  { name: "동아일보", slug: "donga", source: "동아일보", url: "https://rss.donga.com/total.xml", hint: "mz" },
-  { name: "동아일보 경제", slug: "donga-economy", source: "동아일보", url: "https://rss.donga.com/economy.xml", hint: "money" },
-  { name: "오마이뉴스", slug: "ohmynews", source: "오마이뉴스", url: "https://rss.ohmynews.com/rss/ohmynews.xml", hint: "mz" },
-  { name: "SBS 뉴스", slug: "sbs", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=01", hint: "mz" },
-  { name: "SBS 경제", slug: "sbs-economy", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=02", hint: "money" },
+  { name: "SBS 문화·라이프", slug: "sbs-life", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=08", hint: "culture" },
+  // 테크·경제.
+  { name: "연합뉴스 산업", slug: "yna-industry", source: "연합뉴스", url: "https://www.yna.co.kr/rss/industry.xml", hint: "tech" },
   { name: "블로터", slug: "bloter", source: "블로터", url: "https://www.bloter.net/rss/allArticle.xml", hint: "tech" },
   { name: "전자신문", slug: "etnews", source: "전자신문", url: "https://rss.etnews.com/Section901.xml", hint: "tech" },
-  // 인스타에서 반응이 붙는 쪽 — 연예·사회 사건·소비자 논란. 사진이 붙는 피드만 넣었습니다.
-  { name: "연합뉴스 연예", slug: "yna-ent", source: "연합뉴스", url: "https://www.yna.co.kr/rss/entertainment.xml", hint: "culture" },
-  { name: "연합뉴스 사회", slug: "yna-society", source: "연합뉴스", url: "https://www.yna.co.kr/rss/society.xml", hint: "mz" },
-  { name: "SBS 사회", slug: "sbs-society", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=03", hint: "mz" },
-  { name: "SBS 문화·라이프", slug: "sbs-life", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=08", hint: "culture" },
-  { name: "조선일보", slug: "chosun", source: "조선일보", url: "https://www.chosun.com/arc/outboundfeeds/rss/?outputType=xml", hint: "mz" },
+  { name: "연합뉴스 경제", slug: "yna-economy", source: "연합뉴스", url: "https://www.yna.co.kr/rss/economy.xml", hint: "money" },
+  { name: "동아일보 경제", slug: "donga-economy", source: "동아일보", url: "https://rss.donga.com/economy.xml", hint: "money" },
+  { name: "SBS 경제", slug: "sbs-economy", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=02", hint: "money" },
   { name: "매일경제", slug: "mk", source: "매일경제", url: "https://www.mk.co.kr/rss/30000001/", hint: "money" },
 ];
 
@@ -208,6 +212,37 @@ function tagAttr(block: string, tag: string, attr: string): string {
   return block.match(re)?.[1] ?? "";
 }
 
+/** description/content 안에 들어 있는 첫 <img> — 사진은 없지만 본문 HTML에 사진을 넣는 피드가 많습니다. */
+function firstImageIn(raw: string): string {
+  const match = raw.match(/<img[^>]+src=["']([^"']+)["']/i);
+  if (!match) return "";
+  const src = match[1]
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/\/\//, "//");
+  return /^https?:\/\//i.test(src) ? src : "";
+}
+
+/**
+ * 대표 사진 주소 — 피드마다 담는 자리가 달라서 아는 자리를 모두 확인합니다.
+ * 서명(auth=…)이 붙은 CDN 주소가 있어 400자에서 자르지 않습니다(자르면 사진이 깨집니다).
+ */
+function imageOf(block: string, rawSummary: string): string {
+  const candidates = [
+    tagAttr(block, "media:content", "url"),
+    tagAttr(block, "media:thumbnail", "url"),
+    tagAttr(block, "enclosure", "url"),
+    tagAttr(block, "image", "url"),
+    tagAttr(block, "og:image", "content"),
+    firstImageIn(rawSummary),
+  ];
+  for (const value of candidates) {
+    const src = clean(value, 1_500);
+    if (/^https?:\/\//i.test(src)) return src;
+  }
+  return "";
+}
+
 /** RSS 2.0 / dc / media 네임스페이스가 섞여 있어도 필요한 값만 뽑습니다. */
 export function parseFeed(xml: string, feed: Feed): Article[] {
   const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].slice(0, MAX_ITEMS_PER_FEED);
@@ -228,7 +263,7 @@ export function parseFeed(xml: string, feed: Feed): Article[] {
         .replace(/\s*\.\.\.$/, ""),
       600,
     );
-    const image = clean(tagAttr(block, "media:content", "url") || tagAttr(block, "enclosure", "url"), 400);
+    const image = imageOf(block, rawSummary);
     const publishedAt = parseDate(tagText(block, "pubDate") || tagText(block, "dc:date"));
 
     out.push({
@@ -269,13 +304,65 @@ const MICRO_NEWS =
 
 /** 20~30대가 실제로 말하게 되는 키워드에 점수를 줍니다. */
 const HOT_KEYWORDS: { re: RegExp; weight: number; category?: Category }[] = [
-  { re: /(MZ|Z세대|2030|청년|사회초년생|20대|30대)/, weight: 30, category: "mz" },
-  { re: /(연봉|월급|성과급|수당|최저임금|주\s*4일|재택|야근|회식|채용|공채|면접|퇴사|이직|번아웃|갑질|노조|파업)/, weight: 28, category: "work" },
-  { re: /(물가|장바구니|치킨|커피|배달|구독|요금|인상|환율|부동산|전세|월세|대출|세금|지원금|소비|가격|금리)/, weight: 26, category: "money" },
-  { re: /(AI|인공지능|챗GPT|반도체|플랫폼|앱|서비스|개인정보|해킹|유출|알고리즘|로봇|전기차)/, weight: 24, category: "tech" },
-  { re: /(드라마|예능|웹툰|아이돌|팬덤|티켓팅|공연|넷플릭스|유튜브|쇼츠|밈|시즌|영화)/, weight: 22, category: "culture" },
-  { re: /(논란|의혹|사과|파문|반발|비판|고소|소송|철회|중단|1위|신기록|돌파|최저|최고)/, weight: 18 },
+  { re: /(아이돌|배우|가수|연예인|드라마|예능|영화|팬덤|콘서트|티켓팅|웹툰|넷플릭스|유튜버|쇼츠|앨범|컴백|열애|결혼|이혼|출연|시청률|공연|뮤지컬|오디션|팬미팅|굿즈|K팝|케이팝)/, weight: 30, category: "entertainment" },
+  { re: /(연봉|월급|성과급|수당|최저임금|주\s*4일|재택|야근|회식|채용|공채|면접|퇴사|이직|번아웃|갑질|노조|파업|권고사직|정년|알바)/, weight: 28, category: "work" },
+  { re: /(물가|장바구니|치킨|커피|배달|구독|요금|인상|환율|부동산|전세|월세|대출|세금|지원금|소비|가격|금리|집값)/, weight: 26, category: "money" },
+  { re: /(AI|인공지능|챗GPT|반도체|플랫폼|앱|서비스|개인정보|해킹|유출|알고리즘|로봇|전기차|배터리|스타트업|게임)/, weight: 24, category: "tech" },
+  { re: /(사건|사고|화재|경찰|소방|실종|사망|부상|학교|학생|학부모|교사|주민|아파트|주택|교통|지하철|병원|응급|복지|환경|한파|폭설|미세먼지|반려|입양|동물|봉사|기부)/, weight: 22, category: "society" },
+  { re: /(전시|미술|도서|책|여행|맛집|카페|패션|뷰티|건강|다이어트|육아|인테리어|캠핑|취미|웰빙|축제|와인|라이프)/, weight: 20, category: "culture" },
+  { re: /(MZ|Z세대|2030|청년|사회초년생|20대|30대)/, weight: 18, category: "society" },
+  { re: /(논란|의혹|사과|파문|반발|비판|고소|소송|철회|중단|1위|신기록|돌파|최저|최고)/, weight: 16 },
 ];
+
+/**
+ * 장르 판정 — 제목에 강하게 걸리는 말을 점수로 모으고, 애매하면 피드 성격을 따릅니다.
+ * ("복귀"처럼 여러 분야에 쓰는 말 하나로 연예 기사가 되지 않도록 가중치를 둡니다.)
+ */
+const CATEGORY_HINTS: { re: RegExp; category: Category; weight: number }[] = [
+  { re: /(아이돌|배우(?!자)|가수|연예인|드라마|예능|영화|개봉|박스오피스|관객|팬덤|콘서트|티켓팅|웹툰|넷플릭스|시청률|공연(?!원)|뮤지컬|앨범|컴백|열애|결혼|이혼|출연|오디션|팬미팅|K팝|케이팝|스타(?!트업)|방송(?!통신))/, category: "entertainment", weight: 26 },
+  { re: /(AI|인공지능|챗GPT|반도체|엔비디아|플랫폼|앱|개인정보|해킹|유출|알고리즘|로봇|전기차|배터리|스타트업|게임|젠슨\s*황)/, category: "tech", weight: 24 },
+  { re: /(주가|증시|코스피|금리|환율|물가|장바구니|배달비|구독료|부동산|전세|월세|대출|세금|지원금|소비|가격|집값|매출|실적|투자|모기지)/, category: "money", weight: 22 },
+  { re: /(연봉|월급|성과급|최저임금|주\s*4일|재택|야근|회식|채용|공채|면접|퇴사|이직|번아웃|갑질|노조|파업|권고사직|정년|알바|실업급여|직장인)/, category: "work", weight: 22 },
+  { re: /(사건|사고|화재|경찰|소방|실종|사망|부상|학교|학생|학부모|교사|주민|아파트|주택|교통|지하철|병원|응급|복지|환경|한파|폭설|미세먼지|반려|입양|동물|봉사|기부)/, category: "society", weight: 20 },
+  { re: /(전시|미술|도서|여행|맛집|카페|패션|뷰티|건강|다이어트|육아|인테리어|캠핑|취미|웰빙|축제|와인|라이프|문화)/, category: "culture", weight: 18 },
+];
+
+function classifyCategory(title: string, feedHint: Category): Category {
+  let best: Category = feedHint;
+  let bestScore = 8; // 피드 성격은 기본값 — 제목에 분명한 말이 있으면 그쪽이 이깁니다.
+  for (const rule of CATEGORY_HINTS) {
+    if (!rule.re.test(title)) continue;
+    if (rule.weight > bestScore) {
+      best = rule.category;
+      bestScore = rule.weight;
+    }
+  }
+  return best;
+}
+
+/**
+ * 정치·정부 공격 기사 — 카드뉴스 보드가 한쪽 색으로 물들지 않게 후보에서 뺍니다.
+ * (연예·문화 기사 안에 '계엄' 같은 단어가 섞여도 그건 그대로 둡니다.)
+ */
+const POLITICS_NEWS =
+  /(대통령|대통령실|청와대|국무총리|총리|장관|차관|국회|여당|야당|여야|민주당|국민의힘|개혁신당|조국혁신당|정의당|원내대표|당대표|의원|비례대표|공천|출마|사퇴|탄핵|공소|특검|검찰|법무부|국정감사|청문회|예산안|법안|개각|선거|투표소|대선|총선|지선|정부|정치권|계엄|비상계엄|시국선언|성명서|논평)/;
+
+const SHOWBIZ_PASS = /(드라마|영화|예능|배우|가수|아이돌|앨범|공연|뮤지컬|웹툰|넷플릭스|시청률|팬덤|캐릭터|작품|연출|출연)/;
+
+function isPolitics(item: Article): boolean {
+  if (!POLITICS_NEWS.test(item.title)) return false;
+  return !SHOWBIZ_PASS.test(item.title);
+}
+
+/** 장르별 최소 자리 — 연예·사회가 먼저 보이고, 테크·경제·직장이 뒤를 받칩니다. */
+const GENRE_QUOTA: Record<Category, number> = {
+  entertainment: 2,
+  society: 2,
+  culture: 1,
+  tech: 1,
+  money: 1,
+  work: 1,
+};
 
 /** 정례 보도·알림성 기사 — 인스타에서 아무도 반응하지 않습니다. 화제성에서 크게 깎습니다. */
 const ROUTINE_NEWS =
@@ -289,8 +376,8 @@ const VIRAL_RULES: { re: RegExp; weight: number; category?: Category }[] = [
   { re: /(논란|의혹|폭로|고발|저격|반박|사과|해명|진상|공분|분노|원성|비판|막말|갑질|황당)/, weight: 22 },
   { re: /(사건|사고|충격|경악|발킵|소름|난리|아찔|역대급|사상\s*최초|최초|신기록|돌파)/, weight: 16 },
   { re: /(단독|속보|긴급|특종|1보)/, weight: 14 },
-  { re: /(열애|결혼|이혼|파혼|임신|출산|복귀|컴백|탈퇴|사퇴|은퇴|입대|전역)/, weight: 18, category: "culture" },
-  { re: /(아이돌|배우|가수|드라마|예능|영화|팬덤|콘서트|티켓팅|웹툰|넷플릭스|유튜버|쇼츠|밈)/, weight: 14, category: "culture" },
+  { re: /(열애|결혼|이혼|파혼|임신|출산|복귀|컴백|탈퇴|사퇴|은퇴|입대|전역)/, weight: 18, category: "entertainment" },
+  { re: /(아이돌|배우|가수|드라마|예능|영화|팬덤|콘서트|티켓팅|웹툰|넷플릭스|유튜버|쇼츠|밈)/, weight: 14, category: "entertainment" },
   { re: /(폭행|음주|마약|학폭|성추행|성희롱|탈세|횡령|배임|사기|소송|고소|구속|기소|사망|숨져|실종|화재|참사)/, weight: 26 },
   { re: /(월급|연봉|성과급|최저임금|물가|장바구니|배달비|구독료|집값|전세|월세|대출|금리|세금|지원금|실업|해고|권고사직|정년|주\s*4일)/, weight: 18, category: "money" },
   { re: /(불매|보이콧|집단\s*민원|서명|시위|집회|연대)/, weight: 16 },
@@ -343,6 +430,35 @@ function scoreArticle(item: Article, now: number): number {
   return score;
 }
 
+/** 같은 사건을 여러 언론사가 다른 문장으로 쓴 경우를 잡기 위한 제목 토큰. */
+const TOPIC_STOP = new Set([
+  "그리고", "하지만", "그런데", "이번", "오늘", "지금", "관련", "대한", "위한", "라며", "라고",
+  "한다", "했다", "된다", "있다", "없다", "것이다", "사람", "정도", "기자", "뉴스", "단독", "속보",
+  "종합", "우리", "이런", "저런", "그런", "모두", "모든", "다시", "계속", "이후", "때문", "예정",
+  "오전", "오후", "오늘", "내일", "어제", "사진", "영상", "인터뷰", "발표", "공개", "확인", "논란",
+]);
+
+function topicTokens(title: string): Set<string> {
+  const out = new Set<string>();
+  for (const raw of title.split(/[^가-힣A-Za-z0-9]+/)) {
+    const word = raw.replace(/(은|는|이|가|을|를|의|에|와|과|도|만|로|으로|에서|에게|부터|까지|께서)$/, "");
+    if (word.length < 2 || TOPIC_STOP.has(word) || /^\d+$/.test(word)) continue;
+    out.add(word);
+  }
+  return out;
+}
+
+/** 제목이 사실상 같은 사건인지 — 단어 겹침으로 판단합니다. */
+function sameTopic(a: string, b: string): boolean {
+  const A = topicTokens(a);
+  const B = topicTokens(b);
+  if (A.size < 2 || B.size < 2) return false;
+  let shared = 0;
+  for (const token of A) if (B.has(token)) shared += 1;
+  const union = A.size + B.size - shared;
+  return union > 0 && shared / union >= 0.3;
+}
+
 function normalizeTitle(title: string): string {
   return title
     .replace(/^\[[^\]]{1,10}\]\s*/, "")
@@ -354,60 +470,61 @@ function pickCandidates(items: Article[], limit: number): Article[] {
   const now = Date.now();
   const seenTitle = new Set<string>();
   const seenUrl = new Set<string>();
+  const acceptedTitles: string[] = [];
   const scored: Article[] = [];
 
   for (const item of items) {
     if (seenUrl.has(item.url)) continue;
+    if (isPolitics(item)) continue;
     const key = normalizeTitle(item.title);
     if (key.length < 6 || seenTitle.has(key)) continue;
     // 같은 사안을 여러 곳이 받아쓴 기사(제목 앞부분이 같음)는 한 번만 씁니다.
     const prefix = key.slice(0, 18);
     if (prefix.length >= 12 && seenTitle.has(`p:${prefix}`)) continue;
+    // 같은 사건을 다른 제목으로 쓴 기사(고경표 음주운전 3건 등)는 한 장만 씁니다.
+    if (acceptedTitles.some((title) => sameTopic(title, item.title))) continue;
     const withBuzz = { ...item, buzz: buzzOf(item, now) };
     const score = scoreArticle(withBuzz, now);
     if (score < 0) continue;
-    // 연예·사건 키워드가 붙은 기사는 그 결에 맞는 카테고리로 보내 카드가 한쪽에 몰리지 않게 합니다.
-    const viralCategory = VIRAL_RULES.find((rule) => rule.category && rule.re.test(item.title))?.category;
-    const categoryRule = HOT_KEYWORDS.find((rule) => rule.category && rule.re.test(item.title));
     seenUrl.add(item.url);
     seenTitle.add(key);
     if (prefix.length >= 12) seenTitle.add(`p:${prefix}`);
-    scored.push({ ...withBuzz, hint: categoryRule?.category ?? viralCategory ?? item.hint, score });
+    acceptedTitles.push(item.title);
+    scored.push({ ...withBuzz, hint: classifyCategory(item.title, item.hint), score });
   }
 
   scored.sort((a, b) => b.score - a.score);
-
-  // 카테고리가 한쪽으로 몰리지 않게 한 번씩 돌려 가며 담습니다.
+  // ① 장르별 최소 자리를 먼저 채웁니다 — 연예·사회 없이 정치·경제만 나오던 문제를 막습니다.
   const byCategory = new Map<Category, Article[]>();
   for (const item of scored) {
     const list = byCategory.get(item.hint) ?? [];
     list.push(item);
     byCategory.set(item.hint, list);
   }
-  const order: Category[] = [...CATEGORIES].sort(
-    (a, b) => (byCategory.get(b)?.length ?? 0) - (byCategory.get(a)?.length ?? 0),
-  );
-  const picked: Article[] = [];
-  let round = 0;
-  while (picked.length < limit && round < 14) {
-    let added = false;
-    for (const category of order) {
-      const item = byCategory.get(category)?.[round];
-      if (item && !picked.includes(item)) {
-        picked.push(item);
-        added = true;
-        if (picked.length >= limit) break;
-      }
+  // ① 장르별 최소 자리 — 이 묶음이 화면에 먼저 나갑니다(연예·사회·문화·테크·경제·직장).
+  const core: Article[] = [];
+  for (const category of CATEGORIES) {
+    const quota = GENRE_QUOTA[category] ?? 1;
+    const list = byCategory.get(category) ?? [];
+    for (const item of list.slice(0, quota)) {
+      if (core.includes(item)) continue;
+      core.push(item);
     }
-    if (!added) break;
-    round += 1;
   }
-  // 카테고리 순환으로도 자리가 남으면 점수 순으로 채웁니다.
-  for (const item of scored) {
-    if (picked.length >= limit) break;
-    if (!picked.includes(item)) picked.push(item);
+  // ② 남은 후보는 화제성 순으로 뒤에 붙입니다(AI가 고를 여지를 남겨 둡니다).
+  const filler = scored.filter((item) => !core.includes(item)).slice(0, Math.max(0, limit - core.length));
+
+  // ③ 카드 순서는 화제성 — 단, 같은 장르가 연달아 붙지 않게 한 번 섞습니다.
+  core.sort((a, b) => b.score - a.score);
+  const ordered: Article[] = [];
+  const pool = [...core];
+  while (pool.length > 0) {
+    const lastCategory = ordered[ordered.length - 1]?.hint;
+    const nextIndex = pool.findIndex((item) => item.hint !== lastCategory);
+    ordered.push(pool.splice(nextIndex >= 0 ? nextIndex : 0, 1)[0]);
   }
-  return picked;
+  ordered.push(...filler);
+  return ordered;
 }
 
 const BODY_CONCURRENCY = 6;
@@ -466,7 +583,7 @@ const SYSTEM_PROMPT = `당신은 20~30대가 실제로 반응하는 뉴스를 �
    - 금지: "찬성/반대", "이해된다/아니다", "어떻게 보시나요", "영향 있나요", "이미 체감 중", "아직 남 일" 처럼 어느 기사에나 붙는 말.
    - 카드마다 질문·선택지가 완전히 달라야 합니다. 다른 이슈와 같은 문장을 재사용하면 실패입니다.
 8) temp: 지금 여론이 달아오른 정도 0~100 정수(사과·철회·논란·품절은 70 이상, 단순 발표는 30~50).
-9) category: work(직장·커리어) | mz(MZ·트렌드) | money(소비·경제) | tech(테크·AI) | culture(문화·연예) 중 하나.
+9) category: entertainment(연예) | society(사회) | culture(문화·라이프) | tech(테크·AI) | money(경제·소비) | work(직장·커리어) 중 하나.
 10) tags: 검색 키워드 3개(각 12자 이내, # 없이).
 
 출력은 아래 스키마의 JSON 객체 하나뿐입니다. 코드블록·설명을 붙이지 마세요.
@@ -485,7 +602,8 @@ function buildPrompt(items: Article[]): string {
   return [
     "아래는 오늘 한국 언론사 RSS에서 모은 후보 기사입니다. 인스타에 올렸을 때 저장·공유·댓글 싸움이 붙을 이슈 5~6개를 골라 카드뉴스로 만드세요.",
     "그중 최소 2개는 연예·사건·소비자 논란·직장 갑질처럼 댓글창이 갈리는 주제여야 합니다. 점잖은 발표 기사만 고르면 실패입니다.",
-    "카테고리가 겹치지 않게 골라 주세요(가능하면 work·mz·money·tech·culture를 하나씩). 화제성이 높은 후보를 먼저 보세요.",
+    "정치·정부 공격 기사는 고르지 마세요. 연예·사회·문화·테크·경제를 가리지 않고, 카테고리가 겹치지 않게 골라 주세요(가능하면 entertainment·society·culture·tech·money·work를 하나씩). 화제성이 높은 후보를 먼저 보세요.",
+    "카드끼리 문장이 겹치면 실패입니다. 훅·리드·팩트 3줄·쟁점·A/B가 각 기사에만 있는 고유한 숫자·인물·발언으로 채워지게 쓰세요. 같은 표현을 두 카드에 복사하지 마세요.",
     "pick에는 고른 후보 번호를 정확히 적으세요. 없는 번호는 쓰지 마세요.",
     "내용이 2문장도 안 되는 후보는 고르지 마세요. 팩트 3개를 채울 수 있는 기사만 고르세요.",
     "",
@@ -638,7 +756,14 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
     if (!item) continue;
     const slot = items.indexOf(item) + 1;
 
-    const hook = cleanNewsText(card.hook, 80);
+    const draft = composeEditorial({
+      title: item.title,
+      summary: item.summary,
+      body: item.body,
+      source: item.source,
+      buzz: item.buzz,
+    });
+    const hook = cleanNewsText(card.hook, 80) || draft.hook;
     const facts = fillFacts(cleanList(card.facts, 4, 110), item);
     if (hook.length < 6 || facts.length < 2) continue;
 
@@ -651,8 +776,8 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
     const pollRaw = card.poll && typeof card.poll === "object" ? (card.poll as Record<string, unknown>) : {};
     const pollA = cleanNewsText(pollRaw.a, 34);
     const pollB = cleanNewsText(pollRaw.b, 34);
-    const point = cleanNewsText(card.point, 80) || cleanNewsText(pollRaw.question, 60);
-    const background = cleanNewsText(card.background, 180) || fallbackBackground(item, facts);
+    const point = cleanNewsText(card.point, 80) || draft.point || cleanNewsText(pollRaw.question, 60);
+    const background = cleanNewsText(card.background, 180) || draft.background || fallbackBackground(item, facts);
     const category = CATEGORIES.includes(categoryRaw) ? categoryRaw : item.hint;
     // AI가 밋밋한 문항을 주거나 아예 없을 때를 대비해 이 기사 전용 문항을 항상 준비합니다.
     const ownPoll = buildPoll({
@@ -672,28 +797,41 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
       publishedAt: item.publishedAt || Date.now(),
       image: item.image,
       hook,
-      kicker: cleanNewsText(card.kicker, 70) || cleanNewsText(item.title, 70),
+      kicker: cleanNewsText(card.kicker, 70) || draft.kicker,
       facts,
       background,
-      point: point || "지금 이 이슈, 어디까지 받아들일 수 있을까요?",
-      sides: sideA && sideB ? { labelA, labelB, a: sideA.replace(/[.]$/, ""), b: sideB.replace(/[.]$/, "") } : null,
+      point,
+      sides: sideA && sideB ? { labelA, labelB, a: sideA.replace(/[.]$/, ""), b: sideB.replace(/[.]$/, "") } : draft.sides,
       poll:
         pollA && pollB
           ? { question: cleanNewsText(pollRaw.question, 60) || ownPoll.question, a: pollA, b: pollB }
           : ownPoll,
       temp: typeof card.temp === "undefined" ? null : clampInt(card.temp, 0, 100, 55),
       buzz: item.buzz,
-      tags: cleanList(card.tags, 3, 16).map((tag) => tag.replace(/^#/, "")),
+      tags: cleanList(card.tags, 3, 16).map((tag) => tag.replace(/^#/, "")).slice(0, 3).concat(draft.tags).slice(0, 3),
       ai: true,
     });
   }
   return issues;
 }
 
-/** AI가 없거나 실패했을 때 — 실제 기사 그대로의 최소 카드. 없는 내용은 채우지 않습니다. */
+function pollOf(item: Article) {
+  return buildPoll({ title: item.title, summary: item.summary, body: item.body, category: item.hint });
+}
+
+/**
+ * AI가 없거나 실패했을 때 — 그래도 카드마다 문장이 달라야 합니다.
+ * 기사 본문에서 훅·리드·팩트 3줄·배경·쟁점·두 진영을 각각 다른 재료로 뽑습니다.
+ */
 function headlineCards(items: Article[]): Issue[] {
-  return items.slice(0, 6).map((item) => {
-    const facts = fillFacts([], item);
+  return items.slice(0, CARD_LIMIT).map((item) => {
+    const editorial = composeEditorial({
+      title: item.title,
+      summary: item.summary,
+      body: item.body,
+      source: item.source,
+      buzz: item.buzz,
+    });
     return {
       id: shortId(item.url),
       category: item.hint,
@@ -702,17 +840,18 @@ function headlineCards(items: Article[]): Issue[] {
       url: item.url,
       publishedAt: item.publishedAt || Date.now(),
       image: item.image,
-      hook: cleanNewsText(item.title, 70),
-      kicker: `${item.source} · 헤드라인`,
-      facts: facts.length > 0 ? facts : [asSentence(item.title, 95)],
-      background: fallbackBackground(item, facts),
-      point: "",
-      sides: null,
+      hook: editorial.hook,
+      kicker: editorial.kicker,
+      facts: editorial.facts,
+      background: editorial.background,
+      point: editorial.point || pollOf(item).question,
+      sides: editorial.sides,
       // 제목만으로도 그 기사에만 통하는 A/B를 만듭니다(카드마다 다른 문항).
-      poll: buildPoll({ title: item.title, summary: item.summary, body: item.body, category: item.hint }),
+      poll: pollOf(item),
+      // AI 없이 제목만으로 매긴 값은 '논란 온도'가 아닙니다 — 측정값이 없으면 비워 둡니다.
       temp: null,
       buzz: item.buzz,
-      tags: [],
+      tags: editorial.tags,
       ai: false,
     };
   });

@@ -78,7 +78,7 @@ const FIXTURES = [
       facts: [
         '직장인 1천명 중 58%가 점심 예산을 1만5천원 이하로 잡았어요.',
         '1년 전 같은 조사보다 평균 점심 예산이 2천원 늘었어요.',
-      ],
+      , '응답자의 64%는 점심값이 더 오르면 메뉴를 바꾸겠다고 답했어요.'],
       sides: {
         a: '물가가 오른 만큼 식당도 어쩔 수 없다는 쪽',
         b: '월급은 그대로인데 점심값만 오르는 건 이해하기 어렵다는 쪽',
@@ -100,7 +100,7 @@ const FIXTURES = [
       facts: [
         '20~30대 직장인의 저녁 회식 참석률이 3년 전보다 18%포인트 줄었어요.',
         '같은 기간 점심 약속은 6%포인트 늘었어요.',
-      ],
+      , '점심을 고른 이유 1위는 "저녁 시간을 지키고 싶어서"였어요.'],
       sides: {
         a: '일과 저녁을 분리하려는 자연스러운 변화라는 쪽',
         b: '팀 문화가 끊긴다는 우려도 함께 나오는 쪽',
@@ -122,7 +122,7 @@ const FIXTURES = [
       facts: [
         '주요 편의점 도시락 가격이 1년 사이 평균 12% 올랐어요.',
         '지난해 같은 기간 상승률 6%의 두 배예요.',
-      ],
+      , '같은 기간 편의점 김밥 가격 상승률은 4%에 그쳤어요.'],
       sides: {
         a: '원재료·인건비가 올라 가격을 올릴 수밖에 없다는 쪽',
         b: '가장 싼 한 끼가 사라지는 건 다르게 봐야 한다는 쪽',
@@ -144,7 +144,7 @@ const FIXTURES = [
       facts: [
         '20~30대 구독 서비스 지출은 월 평균 4만2천원이에요.',
         '응답자 47%가 거의 쓰지 않는 구독이 2개 이상 있다고 답했어요.',
-      ],
+      , '해지하지 않는 이유 1위는 "언제 쓸지 몰라서"였어요.'],
       sides: {
         a: '필요할 때만 결제하는 방식이 합리적이라는 쪽',
         b: '해지 버튼이 숨어 있는 구조가 문제라는 쪽',
@@ -166,7 +166,7 @@ const FIXTURES = [
       facts: [
         '국내 AI 스타트업 30곳의 올해 신규 채용이 지난해의 절반 수준으로 줄었어요.',
         '투자 위축과 개발 비용 증가가 겹친 결과로 분석됐어요.',
-      ],
+      , '같은 기간 경력직 채용 공고는 12% 늘었어요.'],
       sides: {
         a: '모델 개발은 줄고 도입·운영 인력으로 옮겨가는 과정이라는 쪽',
         b: 'AI boom과 채용 감소가 같이 가는 건 이상하다는 쪽',
@@ -184,7 +184,7 @@ const FIXTURES = [
     card: {
       hook: '웹툰 원작 드라마, 첫 방송에 동시간 1위',
       kicker: '원작 독자 + 신규 시청자 동시 유입',
-      facts: ['웹툰 원작 드라마가 첫 방송에서 동시간대 시청률 1위를 기록했어요.', '원작 독자와 신규 시청자가 함께 본 결과로 풀이돼요.'],
+      facts: ['웹툰 원작 드라마가 첫 방송에서 동시간대 시청률 1위를 기록했어요.', '원작 독자와 신규 시청자가 함께 본 결과로 풀이돼요.', '첫 방송 직후 원작 웹툰 조회수가 3배로 늘었어요.'],
       sides: {
         a: '원작 팬덤이 이미 검증된 이야기를 밀어준다는 쪽',
         b: '원작과 다른 각색에 대한 불만도 함께 나온다는 쪽',
@@ -195,14 +195,14 @@ const FIXTURES = [
     },
   },
   {
-    slug: 'yna-politics',
+    slug: 'yna-society',
     title: '청년 지원금 신청 첫날 3만명 몰려…"서버 지연"',
     summary: '청년 대상 지원금 신청이 시작된 첫날 3만명이 몰리며 접속 지연이 이어졌다. 담당 기관은 서버를 늘려 오후부터 정상화했다고 밝혔다.',
-    category: 'mz',
+    category: 'society',
     card: {
       hook: '지원금 신청 첫날 3만명, 서버가 먼저 지쳤다',
       kicker: '오후부터 정상화',
-      facts: ['지원금 신청 첫날 3만명이 몰려 접속이 지연됐어요.', '담당 기관은 서버를 늘려 오후부터 정상화했다고 밝혔어요.'],
+      facts: ['지원금 신청 첫날 3만명이 몰려 접속이 지연됐어요.', '담당 기관은 서버를 늘려 오후부터 정상화했다고 밝혔어요.', '접속자는 오전 9시에 가장 많이 몰렸어요.'],
       sides: {
         a: '첫날 몰림은 예상 가능한 일, 빠른 복구로 충분하다는 쪽',
         b: '신청 기간이 짧은데 첫날부터 막히면 곤란하다는 쪽',
@@ -220,7 +220,7 @@ const FIXTURES = [
     card: {
       hook: 'AI 구독료 줄줄이 인상, 기능은 그대로',
       kicker: '이달 들어 여러 서비스가 가격 인상',
-      facts: ['구독형 AI 서비스 여러 곳이 이달 들어 요금을 올렸어요.', '사용자들은 기능 변화 없이 가격만 올랐다고 반발하고 있어요.'],
+      facts: ['구독형 AI 서비스 여러 곳이 이달 들어 요금을 올렸어요.', '사용자들은 기능 변화 없이 가격만 올랐다고 반발하고 있어요.', '인상 폭은 서비스별로 10~20% 수준이에요.'],
       sides: {
         a: '모델 운영 비용이 계속 오르니 가격 인상은 불가피하다는 쪽',
         b: '가격을 올리려면 무엇이 좋아졌는지 먼저 보여 줘야 한다는 쪽',
@@ -238,7 +238,7 @@ const FIXTURES = [
     card: {
       hook: '주 4일제 참여 기업, 1년 만에 두 배',
       kicker: '참여 기업 "생산성 유지되거나 올랐다"',
-      facts: ['주 4일제 시범 사업 참여 기업이 지난해보다 두 배로 늘었어요.', '참여 기업들은 생산성이 유지되거나 오히려 올랐다고 답했어요.'],
+      facts: ['주 4일제 시범 사업 참여 기업이 지난해보다 두 배로 늘었어요.', '참여 기업들은 생산성이 유지되거나 오히려 올랐다고 답했어요.', '시범 사업에는 30인 미만 기업이 절반 넘게 참여했어요.'],
       sides: {
         a: '업종에 따라 이미 통하는 방식이라는 쪽',
         b: '모든 업종에 적용하기엔 무리라는 쪽',
@@ -246,6 +246,146 @@ const FIXTURES = [
       poll: { question: '주 4일제, 우리 회사도 되나?', a: '우리도 당장', b: '우리 회사는 글렀다' },
       temp: 63,
       tags: ['주4일제', '근로시간', '생산성'],
+    },
+  },
+  {
+    slug: 'yna-ent',
+    title: '아이돌 그룹 루멘, 데뷔 10년 만에 첫 월드투어…티켓 3분 만에 매진',
+    summary:
+      '그룹 루멘이 데뷔 10주년을 맞아 첫 월드투어를 연다. 서울 공연 티켓 2만4천석이 오픈 3분 만에 매진됐고, 소속사는 추가 회차를 검토 중이라고 밝혔다.',
+    category: 'entertainment',
+    card: {
+      hook: '데뷔 10년 만의 월드투어, 티켓 3분 만에 매진',
+      kicker: '서울 2만4천석 오픈 3분 만에 동나',
+      facts: [
+        '루멘의 첫 월드투어 서울 공연 티켓 2만4천석이 3분 만에 매진됐어요.',
+        '소속사는 팬 요청이 이어지자 추가 회차를 검토 중이라고 밝혔어요.',
+        '데뷔 10주년 기념 투어로, 5개국 11개 도시를 돕니다.',
+      ],
+      background:
+        '루멘은 지난해 정규 3집으로 활동을 쉬었어요. 올해 초 팬미팅에서 신곡을 먼저 공개하며 컴백 신호를 보냈고, 투어 발표와 함께 예약이 몰렸어요.',
+      point: '10년 차 그룹의 첫 월드투어 — 팬덤이 증명한 것',
+      sides: {
+        labelA: '팬덤',
+        labelB: '일반 관객',
+        a: '10년 기다린 팬이 먼저 잡아야 한다는 쪽',
+        b: '추가 회차 없이 매크로만 이긴다면 문제라는 쪽',
+      },
+      poll: { question: '3분 매진, 팬덤 힘인가 티켓팅 문제인가?', a: '팬덤이 대단한 것', b: '구조가 문제다' },
+      temp: 78,
+      tags: ['루멘', '월드투어', '티켓팅'],
+    },
+  },
+  {
+    slug: 'topstar',
+    title: "드라마 '겨울의 문' 최고 시청률 18.7%…OST가 역주행",
+    summary:
+      "드라마 '겨울의 문'이 8회에서 자체 최고 시청률 18.7%를 기록했다. 방송 직후 삽입곡이 음원 차트 40위에서 3위로 뛰어올랐다.",
+    category: 'entertainment',
+    card: {
+      hook: '시청률 18.7% 찍자 OST가 40위→3위로 역주행',
+      kicker: '8회 방송 직후 음원 차트가 뒤집혔다',
+      facts: [
+        "'겨울의 문' 8회 시청률이 18.7%로 자체 최고를 기록했어요.",
+        '방송 직후 삽입곡이 음원 차트 40위에서 3위로 올랐어요.',
+        '제작진은 "원래 3회에 깔려던 곡"이라며 당황했다고 전했어요.',
+      ],
+      background:
+        '이 드라마는 첫 방송 6.2%로 출발해 매주 시청률을 끌어올렸어요. 7회 엔딩에서 주인공이 떠나는 장면이 화제가 되며 반등했어요.',
+      point: '장면 하나가 곡을 다시 차트로 끌어올렸다',
+      sides: {
+        labelA: '드라마 팬',
+        labelB: '원곡 팬',
+        a: '장면과 곡이 맞아떨어져서 다시 들었다는 쪽',
+        b: '드라마 효과로만 뜬 곡은 오래 못 간다는 쪽',
+      },
+      poll: { question: 'OST 역주행, 실력인가 드라마 효과인가?', a: '곡이 좋아서다', b: '드라마 빨이다' },
+      temp: 66,
+      tags: ['겨울의문', 'OST', '시청률'],
+    },
+  },
+  {
+    slug: 'sbs-society',
+    title: '첫눈에 출근길 지하철 지연…한파에 전력 사용량 역대 최고',
+    summary:
+      '수도권에 첫눈이 내린 출근 시간대 지하철 2·4호선이 20분 넘게 지연됐다. 같은 날 오전 전력 사용량은 11월 기준 역대 최고치를 기록했다.',
+    category: 'society',
+    card: {
+      hook: '첫눈 출근길, 지하철 20분 지연에 전력은 최고치',
+      kicker: '2·4호선 지연, 오전 전력 사용량 11월 최대',
+      facts: [
+        '첫눈이 내린 출근 시간대 2·4호선 운행이 20분 넘게 지연됐어요.',
+        '같은 날 오전 전력 사용량이 11월 기준 역대 최고를 기록했어요.',
+        '기상청은 이번 주 영하권 추위가 이어진다고 예보했어요.',
+      ],
+      background:
+        '지난주까지 평년보다 따뜻한 날씨가 이어졌어요. 갑자기 기온이 떨어지며 난방 수요와 도로 결빙이 한꺼번에 몰렸어요.',
+      point: '첫눈 하루에 출근·난방이 동시에 흔들렸다',
+      sides: {
+        labelA: '출근길 시민',
+        labelB: '운영 기관',
+        a: '예보가 있었는데 대비가 없었다는 쪽',
+        b: '첫눈에 몰린 수요는 어쩔 수 없다는 쪽',
+      },
+      poll: { question: '첫눈 출근길 먹통, 누구 책임인가?', a: '대비 부족이다', b: '어쩔 수 없었다' },
+      temp: 61,
+      tags: ['첫눈', '지하철지연', '한파'],
+    },
+  },
+  {
+    slug: 'yna-society',
+    title: '아파트 단지 내 반려견 목줄 규정 두고 주민 갈등',
+    summary:
+      '한 아파트 단지가 엘리베이터 안 반려견 목줄 착용을 의무화하는 관리 규정을 새로 걸었다. 찬성 62%, 반대 38%로 주민 투표가 갈렸다.',
+    category: 'society',
+    card: {
+      hook: '엘리베이터 목줄 의무, 주민 62% 찬성 38% 반대',
+      kicker: '관리 규정 신설에 입주민 투표까지 열렸다',
+      facts: [
+        '한 아파트 단지가 엘리베이터 내 반려견 목줄 착용을 의무화했어요.',
+        '주민 투표 결과 찬성 62%, 반대 38%로 갈렸어요.',
+        '반대 주민은 "반려견이 무서워하는 경우도 있다"고 말했어요.',
+      ],
+      background:
+        '앞서 같은 단지에서 반려견이 사람에게 달려드는 일이 두 번 있었어요. 관리사무소가 규정을 만들었지만 강제성 논란이 이어졌어요.',
+      point: '안전과 반려인의 자유 사이 — 어디까지 규정할 수 있나',
+      sides: {
+        labelA: '찬성 주민',
+        labelB: '반려인',
+        a: '공용 공간에서는 모두가 편해야 한다는 쪽',
+        b: '목줄은 이미 법으로 정해져 있고, 추가 규정은 과하다는 쪽',
+      },
+      poll: { question: '엘리베이터 목줄 의무, 과한가?', a: '당연한 규정이다', b: '반려인만 불편하다' },
+      temp: 57,
+      tags: ['반려견', '아파트', '주민갈등'],
+    },
+  },
+  {
+    slug: 'sbs-life',
+    title: "11월 전시 관람객 40% 늘어…'전시 데이트'가 겨울 유행",
+    summary:
+      '11월 들어 주요 미술관 관람객이 지난해 같은 기간보다 40% 늘었다. 20~30대 관람객 비중이 절반을 넘었고, 야간 개장 티켓은 조기 매진됐다.',
+    category: 'culture',
+    card: {
+      hook: '11월 미술관 관람객 40% 증가, 절반이 2030',
+      kicker: '야간 개장 티켓은 오픈 당일 매진',
+      facts: [
+        '11월 주요 미술관 관람객이 지난해보다 40% 늘었어요.',
+        '20~30대 관람객 비중이 처음으로 절반을 넘었어요.',
+        '야간 개장 티켓은 예매 시작 당일 매진됐어요.',
+      ],
+      background:
+        'SNS에서 조명 좋은 전시장 사진이 퍼지며 주말 데이트 코스로 자리 잡았어요. 미술관들은 야간 개장과 굿즈를 늘리고 있어요.',
+      point: '전시가 데이트 코스가 되면서 관람 방식도 바뀐다',
+      sides: {
+        labelA: '전시 관람객',
+        labelB: '미술 관계자',
+        a: '사진 찍으러 와도 작품을 보게 된다는 쪽',
+        b: '작품보다 사진이 목적이면 전시가 아니라는 쪽',
+      },
+      poll: { question: '전시 데이트, 문화생활인가 사진 찍기인가?', a: '문화생활 맞다', b: '사진 찍기다' },
+      temp: 44,
+      tags: ['전시', '미술관', '데이트'],
     },
   },
 ];
@@ -274,13 +414,33 @@ function rssFor(slug) {
 function svgImage(seed) {
   let h = 0;
   for (let i = 0; i < seed.length; i += 1) h = (h * 31 + seed.charCodeAt(i)) % 360;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420">
-  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0%" stop-color="hsl(${h}, 46%, 42%)"/><stop offset="100%" stop-color="hsl(${(h + 48) % 360}, 52%, 22%)"/>
-  </linearGradient></defs>
-  <rect width="640" height="420" fill="url(#g)"/>
-  <circle cx="${120 + (h % 200)}" cy="130" r="90" fill="rgba(255,255,255,0.10)"/>
-  <circle cx="${420 - (h % 140)}" cy="300" r="130" fill="rgba(255,255,255,0.07)"/>
+  const h2 = (h + 42) % 360;
+  const label = ['CULTURE', 'SOCIETY', 'STAGE', 'CITY', 'PEOPLE', 'NIGHT'][h % 6];
+  let dots = '';
+  for (let y = 20; y < 420; y += 16) {
+    for (let x = 14; x < 640; x += 16) {
+      dots += `<circle cx="${x}" cy="${y}" r="1.1" fill="rgba(255,255,255,0.10)"/>`;
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="1200" viewBox="0 0 960 1200">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="hsl(${h}, 52%, 44%)"/>
+      <stop offset="55%" stop-color="hsl(${h2}, 58%, 26%)"/>
+      <stop offset="100%" stop-color="hsl(${(h + 200) % 360}, 40%, 12%)"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="72%" cy="18%" r="70%">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.42)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+    </radialGradient>
+  </defs>
+  <rect width="960" height="1200" fill="url(#g)"/>
+  <rect width="960" height="1200" fill="url(#glow)"/>
+  <path d="M0 880 L960 620 L960 1200 L0 1200 Z" fill="rgba(8,8,10,0.34)"/>
+  <circle cx="${180 + (h % 240)}" cy="300" r="150" fill="rgba(255,255,255,0.10)"/>
+  <circle cx="${640 - (h % 160)}" cy="760" r="210" fill="rgba(255,255,255,0.07)"/>
+  ${dots}
+  <text x="56" y="1090" fill="rgba(255,255,255,0.30)" font-family="Arial, sans-serif" font-size="92" font-weight="900" letter-spacing="6">${label}</text>
 </svg>`;
 }
 
@@ -288,11 +448,8 @@ function articlePage(title) {
   const fixture = FIXTURES.find((item) => item.title === title) ?? FIXTURES[0];
   const paragraphs = [
     fixture.summary,
-    `${fixture.card.kicker}. 이번 조사는 관련 업계와 이용자 의견을 함께 담았다.`,
-    fixture.card.facts[0],
-    fixture.card.facts[1],
-    fixture.card.sides.a,
-    fixture.card.sides.b,
+    ...(fixture.card.facts ?? []),
+    fixture.card.background ?? fixture.card.kicker,
   ]
     .map((text) => `<p>${text}</p>`)
     .join('');
@@ -449,7 +606,19 @@ function parseCandidates(prompt) {
 function buildTrendingResult(prompt, mode) {
   const candidates = parseCandidates(prompt);
   const issues = [];
-  for (const candidate of candidates.slice(0, 4)) {
+  // 실제 AI처럼 장르를 골고루 — 같은 카테고리는 한 장씩만.
+  const seen = new Set();
+  const picked = [];
+  for (const candidate of candidates) {
+    const fixture = FIXTURES.find((item) => item.title === candidate.title);
+    const category = fixture?.category ?? candidate.category ?? 'society';
+    if (seen.has(category)) continue;
+    seen.add(category);
+    picked.push(candidate);
+    if (picked.length >= 6) break;
+  }
+  const fallback = candidates.filter((c) => !picked.includes(c)).slice(0, 6 - picked.length);
+  for (const candidate of [...picked, ...fallback]) {
     const fixture = FIXTURES.find((item) => item.title === candidate.title);
     if (fixture) {
       issues.push({ pick: candidate.pick, ...cardFromFixture(fixture, mode) });
@@ -461,7 +630,7 @@ function buildTrendingResult(prompt, mode) {
     const secondSentence = body.split(/(?<=[.!?])\s/)[1] ?? candidate.title.slice(0, 70);
     issues.push({
       pick: candidate.pick,
-      category: 'mz',
+      category: 'society',
       hook: candidate.title.slice(0, 38),
       kicker: firstSentence.slice(0, 44),
       facts: [firstSentence.slice(0, 70), secondSentence.slice(0, 70), candidate.title.slice(0, 70)],
@@ -482,7 +651,7 @@ function buildBriefingResult(prompt, mode) {
   const fixture = FIXTURES.find((item) => item.title === title);
   if (fixture) return cardFromFixture(fixture, mode);
   return {
-    category: 'mz',
+    category: 'society',
     hook: (title || '기사 제목 없음').slice(0, 38),
     kicker: '본문에서 확인한 내용',
     facts: ['본문 첫 문장을 그대로 옮겼어요.', '두 번째 문장도 원문 기준이에요.', '세 번째 문장까지 원문에서 확인했어요.'],

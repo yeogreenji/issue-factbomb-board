@@ -253,10 +253,11 @@ const GROUP_RULES: { group: Group; weight: number; re: RegExp }[] = [
 /** 기사에 갈등 신호가 거의 없을 때는 카테고리라도 맞는 틀을 씁니다. */
 const GROUP_BY_CATEGORY: Record<string, Group> = {
   work: "work",
-  mz: "consumer",
-  money: "price",
-  tech: "tech",
+  entertainment: "culture",
+  society: "safety",
   culture: "culture",
+  tech: "tech",
+  money: "price",
 };
 
 function classify(text: string, category = ""): Group {
