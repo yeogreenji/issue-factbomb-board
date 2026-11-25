@@ -29,8 +29,9 @@ const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 /**
- * api/trending.ts 가 수집하는 언론사(19곳)의 이미지 CDN 도메인.
+ * api/trending.ts 가 수집하는 언론사와, 그 기사 사진이 실제로 올라가 있는 국내 CDN.
  * 여기에 없는 호스트는 열어 주지 않습니다 — 남의 사이트를 대신 긁어 주는 프록시가 되지 않도록.
+ * (사진은 카드 캔버스에 그려야 해서, 언론사가 CORS 헤더를 주지 않으면 이 통로가 유일합니다.)
  */
 const ALLOWED_SUFFIX = [
   "yna.co.kr",
@@ -52,6 +53,31 @@ const ALLOWED_SUFFIX = [
   "news1.kr",
   "spotvnews.co.kr",
   "xportsnews.com",
+  // 포털·방송사·연예 매체 CDN — 피드가 이 주소로 사진을 넘겨 줍니다.
+  "pstatic.net",
+  "daumcdn.net",
+  "nateimg.co.kr",
+  "kbs.co.kr",
+  "imbc.com",
+  "seoul.co.kr",
+  "heraldcorp.com",
+  "hankookilbo.com",
+  "kmib.co.kr",
+  "segye.com",
+  "munhwa.com",
+  "dt.co.kr",
+  "edaily.co.kr",
+  "ajunews.com",
+  "asiae.co.kr",
+  "osen.co.kr",
+  "sportsseoul.com",
+  "mydaily.co.kr",
+  "newsen.com",
+  "tvreport.co.kr",
+  "sportsworldi.com",
+  "ilyo.co.kr",
+  "mediatoday.co.kr",
+  "sportalkorea.com",
 ];
 
 /** 검증 하네스(127.0.0.1 가짜 언론사)에서만 켜집니다. */
@@ -80,7 +106,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const raw = clean(queryValue(req, "u"), 900);
+  const raw = clean(queryValue(req, "u"), 900).replace(/&amp;/g, "&");
   const url = raw ? safeUrl(raw) : null;
   if (!url || !hostAllowed(url)) {
     fail(res, 400, "이 주소의 사진은 가져올 수 없습니다.");
@@ -101,6 +127,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
     if (!upstream.ok) {
       fail(res, 502, `사진 서버가 ${upstream.status} 응답을 보냈습니다.`);
+      return;
+    }
+    // 사진 서버가 다른 곳으로 넘겼다면 그 주소도 공개 주소여야 합니다(사설망 SSRF 차단).
+    if (upstream.url && !safeUrl(upstream.url)) {
+      fail(res, 400, "사진 주소가 허용되지 않는 곳으로 넘어갔습니다.");
       return;
     }
     const type = (upstream.headers.get("content-type") || "").toLowerCase();

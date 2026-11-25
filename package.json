@@ -1,9 +1,9 @@
 {
   "name": "issue-factbomb-board",
   "private": true,
-  "version": "8.0.0",
+  "version": "10.0.0",
   "type": "module",
-  "description": "이슈온도계 — 실제 언론사 RSS 19곳에서 오늘의 바이럴·논란 기사를 모아, 편집실 옆 실시간 4:5 미리보기와 인스타 3×3 피드로 확인하며 카드뉴스 5장(PNG/ZIP)과 캡션(해시태그 12~15개)을 만들고, Free·Creator Pro(월 14,900원)·Team Studio(월 39,000원) 요금제로 기능을 잠그는 크리에이터용 공개 이슈 스튜디오. /api/trending·/api/briefing·/api/poll·/api/img",
+  "description": "이슈온도계 — 실제 언론사 RSS 23곳에서 오늘의 바이럴·논란 기사를 모아, 실제 사진 위에 조판한 4:5 인스타 매거진 카드뉴스 5장 (표지 판 5종: 포토 헤드라인·한마디·숫자·포토 스트립·속보)과 이슈마다 다른 A/B 투표·캡션(해시태그 12~15개)을 만들고, Free·Creator Pro(월 14,900원)·Team Studio(월 39,000원) 요금제로 기능을 잠그는 크리에이터용 공개 이슈 스튜디오. /api/trending·/api/briefing·/api/poll·/api/img",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && tsc -p tsconfig.api.json && vite build",

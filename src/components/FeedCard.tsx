@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, Bookmark, Check } from "lucide-react";
 import { CATEGORY_META, type Issue, type PollSnapshot } from "../types";
 import { countLabel, percentOf, timeAgo } from "../lib/format";
 import { proxiedImage } from "../lib/api";
-import { headlineStat, layoutOf, type CardLayout } from "../lib/layout";
-import { renderSlide } from "../lib/cardImage";
+import { headlineStat, layoutOf, quoteOf, type CardLayout } from "../lib/layout";
+import { fallbackPhoto } from "../lib/cardImage";
 import { TempGauge } from "./TempGauge";
 
 interface Props {
@@ -20,57 +20,36 @@ interface Props {
 }
 
 /**
- * 카드 썸네일 — 첫 화면의 모든 카드가 반드시 '이미지'를 갖게 합니다.
+ * 카드 썸네일 — 첫 화면의 모든 카드가 반드시 '사진'을 갖게 합니다.
  *
- *  ① 기사 사진(원본) → ② 같은 출처 프록시(/api/img) → ③ 그래도 안 되면
- *  이 카드의 표지를 캔버스로 그린 이미지(renderSlide)로 채웁니다.
- * ③은 기사 사진과 똑같이 4:5 표지라, 사진이 없는 카드도 빈 칸이 되지 않습니다.
+ *  ① 기사 사진(대표 → 본문 사진) → ② 같은 출처 프록시(/api/img) → ③ 분야별 실사 사진 풀(public/photos).
+ * (예전처럼 캔버스로 표지를 그려 사진 대신 쓰지 않습니다 — 첫 화면이 훨씬 가볍고, 색면도 사라집니다.)
  */
+function thumbAttempts(issue: Issue): string[] {
+  const direct = [...new Set([...(issue.images ?? []), issue.image].filter(Boolean))];
+  const out: string[] = [...direct];
+  for (const src of direct) {
+    const viaProxy = proxiedImage(src);
+    if (viaProxy !== src && !out.includes(viaProxy)) out.push(viaProxy);
+  }
+  for (let offset = 0; offset < 3; offset += 1) {
+    const pool = fallbackPhoto(issue, offset);
+    if (!out.includes(pool)) out.push(pool);
+  }
+  return out;
+}
+
 function useThumb(issue: Issue) {
-  const [src, setSrc] = useState(issue.image);
-  const [retried, setRetried] = useState(false);
-  const [poster, setPoster] = useState<string | null>(null);
-  const gaveUp = useRef(false);
+  const attempts = useMemo(() => thumbAttempts(issue), [issue.id, issue.image, issue.images]);
+  const [step, setStep] = useState(0);
 
   useEffect(() => {
-    setSrc(issue.image);
-    setRetried(false);
-    setPoster(null);
-    gaveUp.current = false;
-  }, [issue.id, issue.image]);
+    setStep(0);
+  }, [attempts]);
 
-  // 기사 사진이 없거나 끝내 안 열렸을 때만 표지를 그립니다(사진이 있으면 그대로 씁니다).
-  const needsPoster = (!issue.image || gaveUp.current) && !poster;
-  useEffect(() => {
-    if (!issue.image) gaveUp.current = true;
-    if (!needsPoster) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const canvas = await renderSlide(issue, 0);
-        if (!cancelled) setPoster(canvas.toDataURL("image/jpeg", 0.82));
-      } catch {
-        /* 캔버스를 못 써도 아래 배경은 남습니다 */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [issue, needsPoster]);
-
-  const onError = () => {
-    const viaProxy = proxiedImage(issue.image);
-    if (!retried && viaProxy !== issue.image) {
-      setRetried(true);
-      setSrc(viaProxy);
-      return;
-    }
-    gaveUp.current = true;
-    setPoster(null);
-    setSrc("");
-  };
-
-  return { src: src && !gaveUp.current ? src : poster, onError, failed: gaveUp.current };
+  const src = step < attempts.length ? attempts[step] : "";
+  const onError = () => setStep((prev) => Math.min(prev + 1, attempts.length));
+  return { src, onError, isStock: src.includes("/photos/") };
 }
 
 /** 카드에서 바로 보이는 A/B — 이슈마다 문장이 다르다는 걸 목록에서 확인할 수 있게 합니다. */
@@ -162,7 +141,7 @@ export function FeedCard({
               alt=""
               loading={index < 4 ? "eager" : "lazy"}
               referrerPolicy="no-referrer"
-              data-thumb={issue.image && !thumb.failed ? "photo" : "cover"}
+              data-thumb={thumb.isStock ? "stock" : "photo"}
               onError={thumb.onError}
             />
           ) : (
@@ -174,9 +153,7 @@ export function FeedCard({
             {layout === "quote" && (
               <>
                 <span className="card-quote-mark">“</span>
-                <span className="card-quote">
-                  {issue.point && issue.point !== issue.poll.question ? issue.point : issue.kicker || issue.hook}
-                </span>
+                <span className="card-quote">{quoteOf(issue) || issue.kicker || issue.hook}</span>
               </>
             )}
             {layout === "stat" && stat && (
@@ -291,7 +268,7 @@ export function HeroCard({ issue, poll, onOpen }: { issue: Issue; poll: PollSnap
             src={thumb.src}
             alt=""
             referrerPolicy="no-referrer"
-            data-thumb={issue.image && !thumb.failed ? "photo" : "cover"}
+            data-thumb={thumb.isStock ? "stock" : "photo"}
             onError={thumb.onError}
           />
         )}

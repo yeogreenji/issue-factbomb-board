@@ -4,21 +4,27 @@
  * 화면 미리보기도 **이 캔버스로 그린 결과 그대로**를 보여 줍니다(별도 DOM 조판 없음).
  * 그래서 "보는 카드"와 "저장되는 PNG"가 100% 같은 파일입니다 — 저장은 렌더된 blob을 그대로 내려받습니다.
  *
- *  ① 표지   — 기사 사진 + 진한 그라데이션 + 훅 헤드라인 + 핫 배지 (인스타 썸네일)
- *  ② 무슨 일인데 — 사진 띠 + 번호 카드 3개, 숫자는 형광 하이라이트
- *  ③ 왜 지금 뜨나 — 사진 카드 + 인용 + 핵심 쟁점 박스
- *  ④ A vs B — 두 진영 대결 패널 + VS 배지
- *  ⑤ 당신의 선택 — 투표 질문 + A/B + 댓글 유도 엔딩 카드
+ * v10 설계 — 색면·도형만 채우던 PPT식 카드를 없애고, **다섯 장 모두 실제 사진 위에 활자를 얹는
+ * 인스타 매거진 채널(디에디트·캐릿·인사이트) 구성**으로 다시 짰습니다.
+ *
+ *  ① 표지   — 기사 사진 전체 + 굵은 헤드라인. 판 5종(포토 헤드라인·한마디·숫자·포토 스트립·속보)
+ *  ② 무슨 일인데 — 사진 띠 위에 헤드라인, 아래에 번호 붙은 팩트 3줄(숫자는 강조색)
+ *  ③ 왜 지금 뜨나 — 사진 전체 위에 큰 인용/배경, 아래 지면에 '핵심 쟁점' 바
+ *  ④ 어디서 갈렸나 — 사진 띠 + 종이 지면을 세로 괘선으로 갈라 A/B 두 진영(색 블록 없음)
+ *  ⑤ 당신의 선택 — 사진 위 질문, 아래 지면에 A/B 선택지와 댓글 유도 바
+ *
+ * 사진은 ① 기사 대표 사진 → ② 기사 본문 사진 → ③ 분야별 실사 사진 풀(public/photos) 순으로
+ * 반드시 한 장 이상 깔립니다. 단색 배경으로 때우는 폴백은 없습니다.
  *
  * 색은 테마(lib/theme.ts)에서 역할별로 가져옵니다 — 에디토리얼 다크·모던 화이트·브레이킹 레드·트렌디 파스텔.
  * 크리에이터가 고친 문구(lib/copy.ts)와 워터마크 핸들이 그대로 PNG에 박힙니다.
  */
 
-import { CATEGORY_META, type Issue } from "../types";
+import { CATEGORY_META, type Category, type Issue } from "../types";
 import { timeAgo } from "./format";
 import { buildZip } from "./zip";
 import { proxiedImage } from "./api";
-import { headlineStat, layoutOf, type CardLayout } from "./layout";
+import { headlineStat, layoutOf, quoteOf, type CardLayout } from "./layout";
 import {
   CARD_THEMES,
   DEFAULT_THEME,
@@ -33,8 +39,13 @@ export const CARD_W = 1080;
 export const CARD_H = 1350;
 export const SLIDE_COUNT = 5;
 
+/** 바깥 여백 — 잡지 지면처럼 넉넉하게. */
 const M = 76;
 const SANS = '"Pretendard Variable", Pretendard, "SUIT Variable", SUIT, sans-serif';
+/** 사진 위 글자는 테마와 상관없이 밝은 잉크를 씁니다(어두운 사진 위 검정 글자를 막습니다). */
+const ON_PHOTO = "#fffdf8";
+const ON_PHOTO_DIM = "rgba(255,253,248,0.78)";
+const ON_PHOTO_FAINT = "rgba(255,253,248,0.56)";
 
 type Ctx = CanvasRenderingContext2D;
 
@@ -45,6 +56,8 @@ type Ctx = CanvasRenderingContext2D;
  */
 let P: CardPalette = CARD_THEMES[DEFAULT_THEME];
 let HANDLE = "";
+/** 이 카드에 쓸 사진들 — renderSlide가 미리 받아 둡니다. */
+let PLATES: Plate[] = [];
 
 export interface RenderOptions {
   theme?: CardThemeId | string;
@@ -74,18 +87,33 @@ function isLight(hex: string): boolean {
   return (r * 299 + g * 587 + b * 114) / 1000 > 150;
 }
 
-/** 진한 블록 위에서 강조색이 묻히면(모던 화이트처럼 검정 위 검정) 블록 글자색으로 대체합니다. */
-function popOnSolid(): string {
-  const a = P.accent.replace("#", "");
-  const b = P.solid.replace("#", "");
-  if (a.slice(0, 6).toLowerCase() === b.slice(0, 6).toLowerCase()) return P.onSolid;
-  return isLight(P.accent) && isLight(P.solid) ? P.onSolid : P.accent;
+/** 사진 위 강조색 — 테마 강조색이 어두우면(모던 화이트의 검정) 밝은 잉크로 대체합니다. */
+function photoAccent(): string {
+  return isLight(P.accent) ? P.accent : ON_PHOTO;
+}
+
+function hash(text: string): number {
+  let value = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    value ^= text.charCodeAt(i);
+    value = Math.imul(value, 16777619);
+  }
+  return value >>> 0;
 }
 
 /* ---------------------------------------------------------------- helpers */
 
 function setFont(ctx: Ctx, weight: number, size: number, family = SANS): void {
   ctx.font = `${weight} ${size}px ${family}`;
+}
+
+/** 자간 — 마이크로 라벨을 잡지처럼 벌려 씁니다. 지원하지 않는 브라우저에서는 그냥 붙습니다. */
+function setTracking(ctx: Ctx, px: number): void {
+  try {
+    (ctx as Ctx & { letterSpacing?: string }).letterSpacing = `${px}px`;
+  } catch {
+    /* letterSpacing 미지원 — 무시 */
+  }
 }
 
 function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: number): void {
@@ -99,45 +127,34 @@ function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: numb
   ctx.closePath();
 }
 
-function fillRound(ctx: Ctx, x: number, y: number, w: number, h: number, r: number, color: string): void {
+function fillRect(ctx: Ctx, x: number, y: number, w: number, h: number, color: string): void {
   ctx.fillStyle = color;
-  roundRect(ctx, x, y, w, h, r);
-  ctx.fill();
+  ctx.fillRect(x, y, w, h);
 }
 
-function strokeRound(ctx: Ctx, x: number, y: number, w: number, h: number, r: number, color: string, width = 2): void {
-  ctx.strokeStyle = color;
-  ctx.lineWidth = width;
-  roundRect(ctx, x, y, w, h, r);
-  ctx.stroke();
-}
-
-/** 한글은 띄어쓰기 단위로, 한 단어가 폭을 넘으면 글자 단위로 잘라 줄바꿈합니다. */
-function wrapText(ctx: Ctx, text: string, maxWidth: number, maxLines: number): string[] {
+/** 한글은 띄어쓰기 단위로, 한 단어가 폭을 넘으면 글자 단위로 잘라 줄바꿈합니다(자르지 않고 전부). */
+function wrapWords(ctx: Ctx, text: string, maxWidth: number): string[] {
   const value = text.replace(/\s+/g, " ").trim();
   if (!value) return [];
   const lines: string[] = [];
   let line = "";
-
-  const pushLine = () => {
-    if (line) lines.push(line);
-    line = "";
-  };
-
   for (const word of value.split(" ")) {
     const candidate = line ? `${line} ${word}` : word;
     if (ctx.measureText(candidate).width <= maxWidth) {
       line = candidate;
       continue;
     }
-    pushLine();
+    if (line) {
+      lines.push(line);
+      line = "";
+    }
     if (ctx.measureText(word).width <= maxWidth) {
       line = word;
       continue;
     }
     let chunk = "";
     for (const char of word) {
-      if (ctx.measureText(chunk + char).width > maxWidth) {
+      if (chunk && ctx.measureText(chunk + char).width > maxWidth) {
         lines.push(chunk);
         chunk = char;
       } else {
@@ -146,34 +163,79 @@ function wrapText(ctx: Ctx, text: string, maxWidth: number, maxLines: number): s
     }
     line = chunk;
   }
-  pushLine();
-
-  if (lines.length <= maxLines) return lines;
-  const kept = lines.slice(0, maxLines);
-  let last = kept[maxLines - 1];
-  while (last.length > 1 && ctx.measureText(`${last}…`).width > maxWidth) last = last.slice(0, -1);
-  kept[maxLines - 1] = `${last.trim()}…`;
-  return kept;
+  if (line) lines.push(line);
+  return lines;
 }
 
-/** 폰트 크기를 줄여 가며 제목이 정해진 줄 수 안에 들어오게 맞춥니다. */
-function fitHeading(
+function clipLines(ctx: Ctx, lines: string[], maxLines: number, maxWidth: number): { lines: string[]; clipped: boolean } {
+  if (lines.length <= maxLines) return { lines, clipped: false };
+  const kept = lines.slice(0, Math.max(1, maxLines));
+  let last = kept[kept.length - 1];
+  while (last.length > 1 && ctx.measureText(`${last}…`).width > maxWidth) last = last.slice(0, -1);
+  kept[kept.length - 1] = `${last.trim()}…`;
+  return { lines: kept, clipped: true };
+}
+
+interface Fit {
+  size: number;
+  lines: string[];
+  lineHeight: number;
+  height: number;
+  clipped: boolean;
+}
+
+/**
+ * 정해진 영역 안에 들어오는 가장 큰 글자 크기를 찾습니다.
+ * 영역을 넘으면 한 단계씩 줄이고, 최소 크기에서도 넘칠 때만 말줄임합니다 —
+ * 그래서 아래·위 블록과 글자가 겹치는 일이 생기지 않습니다.
+ */
+function fitRegion(
   ctx: Ctx,
   text: string,
-  maxWidth: number,
-  maxLines: number,
-  start: number,
-  min: number,
-  weight = 900,
-): { size: number; lines: string[] } {
-  for (let size = start; size >= min; size -= 2) {
-    setFont(ctx, weight, size);
-    const lines = wrapText(ctx, text, maxWidth, maxLines);
-    const fits = lines.length <= maxLines && lines.every((line) => ctx.measureText(line).width <= maxWidth);
-    if (fits) return { size, lines };
+  options: {
+    w: number;
+    h: number;
+    max: number;
+    min: number;
+    weight?: number;
+    lineFactor?: number;
+    maxLines?: number;
+    family?: string;
+  },
+): Fit {
+  const weight = options.weight ?? 900;
+  const lf = options.lineFactor ?? 1.12;
+  const family = options.family ?? SANS;
+  const value = text.replace(/\s+/g, " ").trim();
+  if (!value) return { size: options.min, lines: [], lineHeight: options.min * lf, height: 0, clipped: false };
+
+  let fallback: Fit | null = null;
+  for (let size = Math.round(options.max); size >= options.min; size -= 2) {
+    setFont(ctx, weight, size, family);
+    const lineHeight = Math.round(size * lf);
+    const maxLines = Math.min(options.maxLines ?? 99, Math.max(1, Math.floor(options.h / lineHeight)));
+    const clipped = clipLines(ctx, wrapWords(ctx, value, options.w), maxLines, options.w);
+    const fit: Fit = {
+      size,
+      lines: clipped.lines,
+      lineHeight,
+      height: clipped.lines.length * lineHeight,
+      clipped: clipped.clipped,
+    };
+    if (!clipped.clipped) return fit;
+    if (!fallback) fallback = fit;
   }
-  setFont(ctx, weight, min);
-  return { size: min, lines: wrapText(ctx, text, maxWidth, maxLines) };
+  setFont(ctx, weight, options.min, family);
+  const lineHeight = Math.round(options.min * lf);
+  const maxLines = Math.min(options.maxLines ?? 99, Math.max(1, Math.floor(options.h / lineHeight)));
+  const clipped = clipLines(ctx, wrapWords(ctx, value, options.w), maxLines, options.w);
+  return {
+    size: options.min,
+    lines: clipped.lines,
+    lineHeight,
+    height: clipped.lines.length * lineHeight,
+    clipped: true,
+  };
 }
 
 function drawLines(ctx: Ctx, lines: string[], x: number, y: number, lineHeight: number): number {
@@ -192,7 +254,7 @@ interface Seg {
   hot: boolean;
 }
 
-/** "1년 새 12% 올랐다" → 숫자 덩어리만 hot으로 잘라 카드에서 형광펜처럼 강조합니다. */
+/** "1년 새 12% 올랐다" → 숫자 덩어리만 hot으로 잘라 카드에서 강조합니다. */
 export function splitSegments(text: string): Seg[] {
   const parts = text.split(/(\d[\d,.]*\s*(?:%|퍼센트|배|만\s*원|억\s*원|조\s*원|원|만|억|조|명|개|년|개월|시간|분|위|대|포인트|%p)?)/g);
   const out: Seg[] = [];
@@ -206,1077 +268,74 @@ export function splitSegments(text: string): Seg[] {
   return out;
 }
 
-interface RichLine {
-  segs: Seg[];
-  width: number;
-}
-
-/** 숫자 강조를 유지한 채 줄바꿈합니다(폰트는 미리 세팅돼 있어야 합니다). */
-function layoutRich(ctx: Ctx, text: string, maxWidth: number, maxLines: number): RichLine[] {
-  const words = text.replace(/\s+/g, " ").trim().split(" ");
-  const lines: RichLine[] = [];
-  let current: RichLine = { segs: [], width: 0 };
-
-  const append = (segs: Seg[]) => {
-    for (const seg of segs) {
-      const last = current.segs[current.segs.length - 1];
-      if (last && last.hot === seg.hot) {
-        last.text += seg.text;
-      } else {
-        current.segs.push({ ...seg });
-      }
-      current.width += ctx.measureText(seg.text).width;
-    }
-  };
-
-  const pushLine = () => {
-    if (current.segs.length > 0) lines.push(current);
-    current = { segs: [], width: 0 };
-  };
-
-  for (const word of words) {
-    if (!word) continue;
-    const segs = splitSegments(word);
-    const wordWidth = segs.reduce((sum, seg) => sum + ctx.measureText(seg.text).width, 0);
-    const spaceWidth = ctx.measureText(" ").width;
-    if (current.width > 0 && current.width + spaceWidth + wordWidth > maxWidth) pushLine();
-    if (current.width > 0) {
-      append([{ text: " ", hot: false }]);
-    }
-    if (wordWidth <= maxWidth) {
-      append(segs);
-      continue;
-    }
-    // 한 단어가 한 줄보다 길면 글자 단위로 쪼갭니다.
-    for (const seg of segs) {
-      for (const char of seg.text) {
-        const charWidth = ctx.measureText(char).width;
-        if (current.width > 0 && current.width + charWidth > maxWidth) pushLine();
-        append([{ text: char, hot: seg.hot }]);
-      }
-    }
-  }
-  pushLine();
-
-  if (lines.length <= maxLines) return lines;
-  return lines.slice(0, maxLines);
-}
-
-/** 형광펜(마커) 스타일 — 숫자만 강조색 블록으로 튀게 그립니다. */
-function drawRichLines(
+/**
+ * 줄바꿈은 fitRegion이 정한 그대로 두고, 각 줄 안의 숫자만 강조색으로 칠합니다.
+ * (사진 위에서는 marker를 쓰지 않습니다 — 사진이 가려지니까요.)
+ */
+function drawEmphasisLines(
   ctx: Ctx,
-  lines: RichLine[],
+  lines: string[],
   x: number,
   y: number,
   size: number,
   lineHeight: number,
-  options: { color: string; hot: "marker" | "color"; marker?: string; markerInk?: string } = {
-    color: P.fg,
-    hot: "marker",
-  },
-): number {
+  options: { color: string; hot: string; weight?: number; marker?: string; markerInk?: string },
+): void {
+  setFont(ctx, options.weight ?? 900, size);
   let cursor = y;
   for (const line of lines) {
     let px = x;
-    for (const seg of line.segs) {
+    for (const seg of splitSegments(line)) {
       const width = ctx.measureText(seg.text).width;
-      if (seg.hot && options.hot === "marker") {
-        ctx.fillStyle = options.marker ?? P.accent;
-        roundRect(ctx, px - 6, cursor + size * 0.06, width + 12, size * 0.98, 8);
+      if (seg.hot && options.marker) {
+        ctx.fillStyle = options.marker;
+        roundRect(ctx, px - 5, cursor + size * 0.1, width + 10, size * 0.94, 7);
         ctx.fill();
         ctx.fillStyle = options.markerInk ?? P.onAccent;
-      } else if (seg.hot) {
-        ctx.fillStyle = options.marker ?? P.accent;
       } else {
-        ctx.fillStyle = options.color;
+        ctx.fillStyle = seg.hot ? options.hot : options.color;
       }
       ctx.fillText(seg.text, px, cursor);
       px += width;
     }
     cursor += lineHeight;
   }
-  return cursor;
 }
 
-/* ------------------------------------------------------------- 배경 그리기 */
+/* ------------------------------------------------------------- 사진 */
 
-function coverRect(img: HTMLImageElement, w: number, h: number, focusY = 0.42) {
-  const iw = img.naturalWidth || img.width;
-  const ih = img.naturalHeight || img.height;
-  const scale = Math.max(w / iw, h / ih);
-  const dw = iw * scale;
-  const dh = ih * scale;
-  return { x: (w - dw) / 2, y: (h - dh) * focusY, w: dw, h: dh };
+export interface Plate {
+  img: HTMLImageElement;
+  src: string;
+  /** 기사 사진이 아니라 분야별 실사 사진 풀에서 온 '자료사진'. */
+  stock: boolean;
 }
 
-function drawPhoto(
-  ctx: Ctx,
-  img: HTMLImageElement | null,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  radius = 0,
-  focusY = 0.42,
-): void {
-  if (!img) return;
-  ctx.save();
-  if (radius > 0) {
-    roundRect(ctx, x, y, w, h, radius);
-    ctx.clip();
-  }
-  ctx.beginPath();
-  ctx.rect(x, y, w, h);
-  ctx.clip();
-  const rect = coverRect(img, w, h, focusY);
-  ctx.drawImage(img, x + rect.x, y + rect.y, rect.w, rect.h);
-  ctx.restore();
+/** 분야별 실사 사진 풀 — 기사에 사진이 없거나 사진 서버가 막아도 카드가 색면이 되지 않게. */
+const PHOTO_POOL: Record<Category, string[]> = {
+  entertainment: ["ent-1", "ent-2", "ent-3"],
+  society: ["soc-1", "soc-2", "soc-3"],
+  culture: ["cul-1", "cul-2", "cul-3"],
+  tech: ["tec-1", "tec-2", "tec-3"],
+  money: ["mon-1", "mon-2", "mon-3"],
+  work: ["wrk-1", "wrk-2", "wrk-3"],
+};
+
+const BASE = (import.meta.env?.BASE_URL as string | undefined) || "/";
+
+function poolSrc(category: Category, seed: string, offset: number): string {
+  const list = PHOTO_POOL[category] ?? PHOTO_POOL.society;
+  const pick = (hash(`${seed}:${offset}`) + offset) % list.length;
+  return `${BASE}photos/${list[pick]}.jpg`;
 }
 
-/** 사진이 없을 때도 '포스터'처럼 보이게 — 카테고리 색 그라데이션 + 망점. */
-function posterBase(ctx: Ctx, accent: string): void {
-  const light = isLight(P.paper);
-  ctx.fillStyle = P.paper;
-  ctx.fillRect(0, 0, CARD_W, CARD_H);
-
-  const glow = ctx.createRadialGradient(CARD_W * 0.9, -60, 30, CARD_W * 0.9, -60, 900);
-  glow.addColorStop(0, hexWith(accent, light ? "2e" : "cc"));
-  glow.addColorStop(0.45, hexWith(accent, light ? "0f" : "33"));
-  glow.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, CARD_W, CARD_H);
-
-  const warm = ctx.createRadialGradient(60, CARD_H + 60, 20, 60, CARD_H + 60, 720);
-  warm.addColorStop(0, alpha(P.alt, light ? 0.1 : 0.4));
-  warm.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = warm;
-  ctx.fillRect(0, 0, CARD_W, CARD_H);
-
-  // 망점 — 인쇄물 느낌의 결. 밝은 테마에서는 아주 옅게.
-  ctx.fillStyle = P.grain;
-  for (let row = 0; row < 26; row += 1) {
-    for (let col = 0; col < 22; col += 1) {
-      const cx = 34 + col * 48 + (row % 2) * 24;
-      const cy = 26 + row * 52;
-      const radius = 1.1 + ((row + col) % 3) * 0.5;
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
+function isStockSrc(src: string): boolean {
+  return src.includes("/photos/");
 }
 
-function bottomScrim(ctx: Ctx, from: number, strength = 0.96): void {
-  const grad = ctx.createLinearGradient(0, from, 0, CARD_H);
-  grad.addColorStop(0, `rgba(${P.scrim},0)`);
-  grad.addColorStop(0.55, `rgba(${P.scrim},${strength * 0.82})`);
-  grad.addColorStop(1, `rgba(${P.scrim},${strength})`);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, from, CARD_W, CARD_H - from);
-}
-
-function topScrim(ctx: Ctx, height = 300): void {
-  const grad = ctx.createLinearGradient(0, 0, 0, height);
-  grad.addColorStop(0, `rgba(${P.scrim},0.86)`);
-  grad.addColorStop(1, `rgba(${P.scrim},0)`);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, CARD_W, height);
-}
-
-/** 테마의 서명 — 브레이킹은 위쪽 색 띠, 파스텔은 안쪽 액자. */
-function themeChrome(ctx: Ctx): void {
-  if (P.strip) {
-    ctx.fillStyle = P.accent;
-    ctx.fillRect(0, 0, CARD_W, 14);
-  }
-  if (P.frame) {
-    strokeRound(ctx, 22, 22, CARD_W - 44, CARD_H - 44, 34, alpha(P.fg, 0.16), 3);
-  }
-}
-
-/* ------------------------------------------------------------- 공통 표식 */
-
-type Surface = "paper" | "photo" | "accent";
-
-function surfaceInk(mode: Surface): string {
-  if (mode === "photo") return P.photoInk;
-  if (mode === "accent") return P.onAccent;
-  return P.fg;
-}
-
-function brandTop(ctx: Ctx, mode: Surface = "paper"): void {
-  ctx.fillStyle = P.accentText;
-  ctx.beginPath();
-  ctx.arc(M + 9, 96, 9, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = alpha(surfaceInk(mode), 0.92);
-  setFont(ctx, 800, 28);
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  ctx.fillText(brandName(), M + 30, 97);
-  ctx.textBaseline = "top";
-
-  if (P.rule) {
-    ctx.strokeStyle = alpha(surfaceInk(mode), 0.28);
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(M, 124);
-    ctx.lineTo(CARD_W - M, 124);
-    ctx.stroke();
-  }
-}
-
-function hotBadge(ctx: Ctx, issue: Issue, right = CARD_W - M, top = 72): void {
-  const score = issue.temp ?? issue.buzz ?? 0;
-  const label = issue.temp !== null ? `논란 ${score}°` : `화제 ${score}`;
-  setFont(ctx, 900, 28);
-  const width = ctx.measureText(label).width + 64;
-  fillRound(ctx, right - width, top, width, 52, 26, P.alt);
-  // 온도계 표시 — 이모지 대신 직접 그립니다(기기·폰트마다 다르게 보이지 않도록).
-  const markX = right - width + 24;
-  const markTop = top + 16;
-  ctx.strokeStyle = P.onAlt;
-  ctx.fillStyle = P.onAlt;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(markX, markTop);
-  ctx.lineTo(markX, markTop + 14);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(markX, markTop + 19, 4.6, 0, Math.PI * 2);
-  ctx.fill();
-
-  setFont(ctx, 900, 26);
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "left";
-  ctx.fillText(label, right - width + 48, top + 28);
-  ctx.textAlign = "right";
-  ctx.textBaseline = "top";
-}
-
-function footer(ctx: Ctx, index: number, mode: Surface, note?: string): void {
-  const color = alpha(surfaceInk(mode), 0.5);
-  ctx.fillStyle = color;
-  setFont(ctx, 700, 24);
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-  ctx.fillText(note ? `${brandName()} · ${note}` : brandName(), M, CARD_H - 64);
-  ctx.textAlign = "right";
-  ctx.fillText(`${index + 1} / ${SLIDE_COUNT}`, CARD_W - M, CARD_H - 64);
-  ctx.textAlign = "left";
-}
-
-function categoryChip(ctx: Ctx, issue: Issue, accent: string, x: number, y: number): void {
-  const label = CATEGORY_META[issue.category].label;
-  setFont(ctx, 800, 27);
-  const width = ctx.measureText(label).width + 76;
-  strokeRound(ctx, x, y, width, 52, 26, P.accentText, 2);
-  // 카테고리 색은 작은 점으로만 — 테마가 밝아도 라벨은 테마 글자색으로 읽힙니다.
-  ctx.fillStyle = accent;
-  ctx.beginPath();
-  ctx.arc(x + 22, y + 27, 6, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = P.accentText;
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  ctx.fillText(label, x + 38, y + 28);
-  ctx.textBaseline = "top";
-}
-
-/* ------------------------------------------------------------------ slide 1 */
-
-function drawCoverOverlay(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
-  posterBase(ctx, accent);
-  if (img) {
-    drawPhoto(ctx, img, 0, 0, CARD_W, CARD_H, 0, 0.34);
-    // 사진 위에 카테고리 색을 살짝 얹어 카드마다 톤을 맞춥니다.
-    ctx.fillStyle = hexWith(accent, isLight(P.paper) ? "12" : "1f");
-    ctx.fillRect(0, 0, CARD_W, CARD_H);
-  }
-  topScrim(ctx, 340);
-  // 사진 위 글자가 항상 읽히도록 아래쪽을 길게 깔아 줍니다.
-  bottomScrim(ctx, 560, isLight(P.paper) ? 0.94 : 0.99);
-
-  brandTop(ctx, "photo");
-  hotBadge(ctx, issue);
-
-  categoryChip(ctx, issue, accent, M, 160);
-
-  // 훅 헤드라인 — 숫자는 강조색 글자로 튀게.
-  const heading = fitHeading(ctx, issue.hook, CARD_W - M * 2, 4, 104, 62, 900);
-  setFont(ctx, 900, heading.size);
-  const lineHeight = heading.size * 1.09;
-  const hookHeight = heading.lines.length * lineHeight;
-
-  const kickerSize = 36;
-  setFont(ctx, 700, kickerSize);
-  const kickerLines = issue.kicker ? wrapText(ctx, issue.kicker, CARD_W - M * 2, 2) : [];
-  const kickerHeight = kickerLines.length * kickerSize * 1.42;
-
-  const footY = CARD_H - 172;
-  const kickerTop = footY - 22 - kickerHeight;
-  const hookTop = kickerTop - 26 - hookHeight;
-
-  // 헤드라인 위 강조 룰
-  ctx.fillStyle = P.accentText;
-  ctx.fillRect(M, Math.max(300, hookTop - 42), 132, 9);
-
-  setFont(ctx, 900, heading.size);
-  const richLines = layoutRich(ctx, heading.lines.join(" "), CARD_W - M * 2, 4);
-  // 사진 밝기에 상관없이 읽히도록 글자에 옅은 그림자를 깝니다.
-  const shadow = P.photoInk === P.fg && isLight(P.paper) ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.55)";
-  ctx.shadowColor = shadow;
-  ctx.shadowBlur = 26;
-  ctx.shadowOffsetY = 3;
-  drawRichLines(ctx, richLines, M, hookTop, heading.size, lineHeight, {
-    color: P.photoInk,
-    hot: "color",
-    marker: P.accentText,
-  });
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetY = 0;
-
-  if (kickerLines.length > 0) {
-    setFont(ctx, 700, kickerSize);
-    ctx.fillStyle = alpha(P.photoInk, 0.8);
-    drawLines(ctx, kickerLines, M, kickerTop, kickerSize * 1.42);
-  }
-
-  // 아래 정보 줄
-  ctx.strokeStyle = alpha(P.photoInk, 0.24);
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(M, footY);
-  ctx.lineTo(CARD_W - M, footY);
-  ctx.stroke();
-
-  setFont(ctx, 700, 27);
-  ctx.fillStyle = alpha(P.photoInk, 0.72);
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-  ctx.fillText(`${issue.source} · ${timeAgo(issue.publishedAt)}`, M, footY + 24);
-
-  setFont(ctx, 800, 27);
-  ctx.fillStyle = P.accentText;
-  ctx.textAlign = "right";
-  ctx.fillText("밀어서 5장 →", CARD_W - M, footY + 24);
-  ctx.textAlign = "left";
-
-  footer(ctx, 0, "photo");
-  themeChrome(ctx);
-}
-
-
-/* ------------------------------------------------------- 표지 레이아웃 5종 */
-
-/** 사진 위에 어두운 막을 깔아 글자가 항상 읽히게 합니다. */
-function veil(ctx: Ctx, strength = 0.5): void {
-  ctx.fillStyle = isLight(P.paper) ? `rgba(10,9,7,${strength})` : `rgba(8,8,10,${strength})`;
-  ctx.fillRect(0, 0, CARD_W, CARD_H);
-}
-
-function coverFoot(ctx: Ctx, issue: Issue, mode: Surface, note: string): void {
-  const footY = CARD_H - 150;
-  ctx.strokeStyle = alpha(surfaceInk(mode), 0.24);
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(M, footY);
-  ctx.lineTo(CARD_W - M, footY);
-  ctx.stroke();
-
-  setFont(ctx, 700, 27);
-  ctx.fillStyle = alpha(surfaceInk(mode), 0.74);
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-  ctx.fillText(`${issue.source} · ${timeAgo(issue.publishedAt)}`, M, footY + 22);
-
-  setFont(ctx, 800, 27);
-  ctx.fillStyle = P.accentText;
-  ctx.textAlign = "right";
-  ctx.fillText(note, CARD_W - M, footY + 22);
-  ctx.textAlign = "left";
-  footer(ctx, 0, mode);
-}
-
-/** ② 한마디 — 인용 한 문장을 표지의 주인공으로. */
-function drawCoverQuote(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
-  posterBase(ctx, accent);
-  if (img) {
-    drawPhoto(ctx, img, 0, 0, CARD_W, CARD_H, 0, 0.28);
-    veil(ctx, 0.5);
-  }
-  topScrim(ctx, 280);
-  bottomScrim(ctx, 900, 0.92);
-
-  brandTop(ctx, "photo");
-  hotBadge(ctx, issue);
-  categoryChip(ctx, issue, accent, M, 160);
-
-  setFont(ctx, 900, 210, '"Noto Serif KR", "Nanum Myeongjo", Georgia, serif');
-  ctx.fillStyle = P.accentText;
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-  ctx.fillText("\u201c", M - 6, 214);
-
-  const quote = issue.point || issue.kicker || issue.hook;
-  const fit = fitHeading(ctx, quote, CARD_W - M * 2, 5, 106, 54, 900);
-  setFont(ctx, 900, fit.size);
-  const lineH = fit.size * 1.26;
-  const blockH = fit.lines.length * lineH;
-  const top = Math.max(470, Math.min(760, CARD_H * 0.44 - blockH / 2));
-  ctx.shadowColor = "rgba(0,0,0,0.45)";
-  ctx.shadowBlur = 22;
-  ctx.fillStyle = P.photoInk;
-  drawLines(ctx, fit.lines, M, top, lineH);
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0;
-
-  const ruleY = top + blockH + 46;
-  ctx.fillStyle = P.accentText;
-  ctx.fillRect(M, ruleY, 168, 10);
-
-  const sub = fitHeading(ctx, issue.hook, CARD_W - M * 2, 3, 46, 30, 700);
-  setFont(ctx, 700, sub.size);
-  ctx.fillStyle = alpha(P.photoInk, 0.86);
-  drawLines(ctx, sub.lines, M, ruleY + 40, sub.size * 1.36);
-
-  coverFoot(ctx, issue, "photo", "넘겨서 팩트 3줄 →");
-  themeChrome(ctx);
-}
-
-/** ③ 숫자 — 기사에서 가장 센 수치 하나를 거대하게. */
-function drawCoverStat(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
-  posterBase(ctx, accent);
-  const bandH = 660;
-  if (img) {
-    drawPhoto(ctx, img, 0, 0, CARD_W, bandH, 0, 0.34);
-    ctx.fillStyle = hexWith(accent, isLight(P.paper) ? "1c" : "2c");
-    ctx.fillRect(0, 0, CARD_W, bandH);
-  }
-  topScrim(ctx, 300);
-  const fade = ctx.createLinearGradient(0, bandH - 220, 0, bandH);
-  fade.addColorStop(0, "rgba(0,0,0,0)");
-  fade.addColorStop(1, P.paper);
-  ctx.fillStyle = fade;
-  ctx.fillRect(0, bandH - 220, CARD_W, 220);
-
-  brandTop(ctx, "photo");
-  hotBadge(ctx, issue);
-  categoryChip(ctx, issue, accent, M, 150);
-
-  const heading = fitHeading(ctx, issue.hook, CARD_W - M * 2, 3, 72, 46, 900);
-  setFont(ctx, 900, heading.size);
-  const hookH = heading.lines.length * heading.size * 1.16;
-  ctx.fillStyle = P.photoInk;
-  drawLines(ctx, heading.lines, M, bandH - 90 - hookH, heading.size * 1.16);
-
-  const stat = headlineStat(issue);
-  const blockTop = bandH + 34;
-  const blockH = CARD_H - 300 - blockTop;
-  fillRound(ctx, M, blockTop, CARD_W - M * 2, blockH, 34, P.accent);
-  strokeRound(ctx, M, blockTop, CARD_W - M * 2, blockH, 34, alpha(P.onAccent, 0.16), 2);
-
-  if (stat) {
-    setFont(ctx, 900, 268);
-    const valueWidth = ctx.measureText(stat.value).width;
-    ctx.fillStyle = P.onAccent;
-    ctx.fillText(stat.value, M + 52, blockTop + 46);
-    setFont(ctx, 900, 92);
-    ctx.fillText(stat.unit, M + 56 + valueWidth, blockTop + 214);
-  } else {
-    setFont(ctx, 900, 96);
-    ctx.fillStyle = alpha(P.onAccent, 0.35);
-    ctx.fillText("오늘의 숫자", M + 52, blockTop + 52);
-  }
-
-  const context = fitHeading(ctx, issue.kicker || issue.hook, CARD_W - M * 2 - 104, 3, 44, 30, 700);
-  setFont(ctx, 700, context.size);
-  ctx.fillStyle = alpha(P.onAccent, 0.92);
-  drawLines(ctx, context.lines, M + 52, blockTop + blockH - 60 - context.lines.length * context.size * 1.34, context.size * 1.34);
-
-  coverFoot(ctx, issue, "paper", "숫자로 보기 →");
-  themeChrome(ctx);
-}
-
-/** ④ A vs B — 화면을 갈라 두 진영을 나란히. */
-function drawCoverSplit(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
-  posterBase(ctx, accent);
-  if (img) {
-    drawPhoto(ctx, img, 0, 0, CARD_W, CARD_H, 0, 0.3);
-    veil(ctx, 0.58);
-  }
-  topScrim(ctx, 320);
-  brandTop(ctx, "photo");
-  hotBadge(ctx, issue);
-  categoryChip(ctx, issue, accent, M, 158);
-
-  const heading = fitHeading(ctx, issue.hook, CARD_W - M * 2, 3, 80, 48, 900);
-  setFont(ctx, 900, heading.size);
-  ctx.fillStyle = P.photoInk;
-  ctx.shadowColor = "rgba(0,0,0,0.45)";
-  ctx.shadowBlur = 20;
-  drawLines(ctx, heading.lines, M, 246, heading.size * 1.14);
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0;
-
-  const sides = issue.sides;
-  const optionA = sides?.a || issue.poll.a;
-  const optionB = sides?.b || issue.poll.b;
-  const labelA = sides?.labelA || "A";
-  const labelB = sides?.labelB || "B";
-
-  const panelTop = 600;
-  const panelH = CARD_H - 280 - panelTop;
-  const gap = 16;
-  const pw = (CARD_W - M * 2 - gap) / 2;
-
-  const drawPanel = (x: number, fill: string, ink: string, label: string, text: string) => {
-    fillRound(ctx, x, panelTop, pw, panelH, 28, fill);
-    setFont(ctx, 900, 34);
-    ctx.fillStyle = alpha(ink, 0.72);
-    ctx.fillText(label, x + 32, panelTop + 30);
-    const fit = fitHeading(ctx, text, pw - 64, 5, 46, 30, 900);
-    setFont(ctx, 900, fit.size);
-    ctx.fillStyle = ink;
-    drawLines(ctx, fit.lines, x + 32, panelTop + 92, fit.size * 1.34);
-  };
-
-  drawPanel(M, P.accent, P.onAccent, sides?.labelA ? `A · ${labelA}` : "A", optionA);
-  drawPanel(M + pw + gap, P.alt, P.onAlt, sides?.labelB ? `B · ${labelB}` : "B", optionB);
-
-  const vsY = panelTop + panelH / 2;
-  ctx.fillStyle = P.solid;
-  ctx.beginPath();
-  ctx.arc(CARD_W / 2, vsY, 54, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = P.accentText;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(CARD_W / 2, vsY, 54, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.fillStyle = P.onSolid;
-  setFont(ctx, 900, 32);
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("VS", CARD_W / 2, vsY + 2);
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-
-  coverFoot(ctx, issue, "photo", "당신은 어느 쪽? →");
-  themeChrome(ctx);
-}
-
-/** ⑤ 속보 — 붉은 띠와 큰 활자로 지금 터진 느낌. */
-function drawCoverBreaking(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
-  posterBase(ctx, accent);
-  const bandH = 780;
-  if (img) {
-    drawPhoto(ctx, img, 0, 0, CARD_W, bandH, 0, 0.36);
-    ctx.fillStyle = "rgba(120,8,6,0.32)";
-    ctx.fillRect(0, 0, CARD_W, bandH);
-  }
-  topScrim(ctx, 260);
-  const fade = ctx.createLinearGradient(0, bandH - 200, 0, bandH);
-  fade.addColorStop(0, "rgba(0,0,0,0)");
-  fade.addColorStop(1, P.paper);
-  ctx.fillStyle = fade;
-  ctx.fillRect(0, bandH - 200, CARD_W, 200);
-
-  const stripTop = 54;
-  fillRound(ctx, M, stripTop, 250, 58, 8, P.alt);
-  setFont(ctx, 900, 30);
-  ctx.fillStyle = P.onAlt;
-  ctx.textBaseline = "middle";
-  ctx.fillText("속보 · HOT", M + 26, stripTop + 31);
-  ctx.textBaseline = "top";
-
-  setFont(ctx, 800, 26);
-  ctx.fillStyle = alpha(P.photoInk, 0.86);
-  ctx.fillText(brandName(), M + 274, stripTop + 16);
-
-  hotBadge(ctx, issue, CARD_W - M, stripTop);
-  categoryChip(ctx, issue, accent, M, 140);
-
-  const heading = fitHeading(ctx, issue.hook, CARD_W - M * 2, 4, 108, 58, 900);
-  setFont(ctx, 900, heading.size);
-  const lineH = heading.size * 1.1;
-  const blockH = heading.lines.length * lineH;
-  const top = bandH - 110 - blockH;
-  ctx.shadowColor = "rgba(0,0,0,0.5)";
-  ctx.shadowBlur = 26;
-  ctx.fillStyle = P.photoInk;
-  drawLines(ctx, heading.lines, M, top, lineH);
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0;
-
-  const kicker = fitHeading(ctx, issue.kicker || issue.point, CARD_W - M * 2, 2, 40, 28, 700);
-  setFont(ctx, 700, kicker.size);
-  ctx.fillStyle = alpha(P.photoInk, 0.86);
-  drawLines(ctx, kicker.lines, M, bandH + 46, kicker.size * 1.4);
-
-  ctx.fillStyle = P.accentText;
-  ctx.fillRect(M, bandH + 46 + kicker.lines.length * kicker.size * 1.4 + 18, 132, 8);
-
-  coverFoot(ctx, issue, "paper", "전체 팩트 →");
-  themeChrome(ctx);
-}
-
-/** 표지 레이아웃 선택 — 이슈마다 다른 판으로 그립니다. */
-function drawCover(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null, layout?: CardLayout): void {
-  const picked = layout ?? layoutOf(issue);
-  if (picked === "quote") drawCoverQuote(ctx, issue, accent, img);
-  else if (picked === "stat") drawCoverStat(ctx, issue, accent, img);
-  else if (picked === "split") drawCoverSplit(ctx, issue, accent, img);
-  else if (picked === "breaking") drawCoverBreaking(ctx, issue, accent, img);
-  else drawCoverOverlay(ctx, issue, accent, img);
-}
-
-/* ------------------------------------------------------------------ slide 2 */
-
-
-function drawFacts(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
-  posterBase(ctx, accent);
-  const bandH = 700;
-
-  if (img) {
-    drawPhoto(ctx, img, 0, 0, CARD_W, bandH, 0, 0.36);
-    ctx.fillStyle = isLight(P.paper) ? "rgba(255,255,255,0.16)" : "rgba(8,8,10,0.26)";
-    ctx.fillRect(0, 0, CARD_W, bandH);
-  }
-  topScrim(ctx, 260);
-  // 사진 띠 아래를 본문 바탕과 이어 붙입니다.
-  const fade = ctx.createLinearGradient(0, bandH - 240, 0, bandH);
-  fade.addColorStop(0, "rgba(0,0,0,0)");
-  fade.addColorStop(1, P.paper);
-  ctx.fillStyle = fade;
-  ctx.fillRect(0, bandH - 240, CARD_W, 240);
-
-  brandTop(ctx, "photo");
-
-  ctx.fillStyle = P.accentText;
-  ctx.beginPath();
-  ctx.arc(M + 8, bandH - 230, 8, 0, Math.PI * 2);
-  ctx.fill();
-  setFont(ctx, 900, 30);
-  ctx.fillStyle = P.photoInk;
-  ctx.fillText("01 · 무슨 일인데", M + 26, bandH - 250);
-
-  const heading = fitHeading(ctx, issue.hook, CARD_W - M * 2, 2, 56, 40, 900);
-  ctx.fillStyle = P.fg;
-  setFont(ctx, 900, heading.size);
-  const hookTop = bandH - 192;
-  drawLines(ctx, heading.lines, M, hookTop, heading.size * 1.2);
-
-  // 팩트 3줄 — 번호 카드 + 숫자 형광 하이라이트
-  const facts = issue.facts.slice(0, 3);
-  const listTop = bandH + 18;
-  const listBottom = CARD_H - 264;
-  const rowH = (listBottom - listTop) / Math.max(1, facts.length);
-
-  facts.forEach((fact, index) => {
-    const rowTop = listTop + rowH * index;
-    const chip = 60;
-    fillRound(ctx, M, rowTop + 8, chip, chip, 16, P.accent);
-    ctx.fillStyle = P.onAccent;
-    setFont(ctx, 900, 34);
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(String(index + 1), M + chip / 2, rowTop + 8 + chip / 2 + 2);
-    ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-
-    const textX = M + chip + 32;
-    const maxWidth = CARD_W - textX - M;
-    const size = 40;
-    setFont(ctx, 700, size);
-    const lines = layoutRich(ctx, fact, maxWidth, 2);
-    const blockH = lines.length * size * 1.42;
-    const textTop = rowTop + Math.max(6, (rowH - 16 - blockH) / 2);
-    drawRichLines(ctx, lines, textX, textTop, size, size * 1.42, {
-      color: alpha(P.fg, 0.94),
-      hot: "marker",
-    });
-
-    if (index < facts.length - 1) {
-      ctx.strokeStyle = alpha(P.fg, 0.1);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(M, rowTop + rowH - 8);
-      ctx.lineTo(CARD_W - M, rowTop + rowH - 8);
-      ctx.stroke();
-    }
-  });
-
-  const original = issue.title.length > 42 ? `${issue.title.slice(0, 41)}…` : issue.title;
-  setFont(ctx, 600, 23);
-  ctx.fillStyle = alpha(P.fg, 0.45);
-  ctx.textAlign = "left";
-  ctx.fillText(`원문 · ${issue.source} · ${original}`, M, CARD_H - 208);
-
-  if (issue.tags.length > 0) {
-    setFont(ctx, 800, 25);
-    ctx.fillStyle = P.accentText;
-    ctx.fillText(issue.tags.map((tag) => `#${tag}`).join("  "), M, CARD_H - 162);
-  }
-
-  footer(ctx, 1, "paper");
-  themeChrome(ctx);
-}
-
-/* ------------------------------------------------------------------ slide 3 */
-
-function drawWhy(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
-  posterBase(ctx, accent);
-  bottomScrim(ctx, 300, 0.9);
-
-  const photoW = CARD_W - M * 2;
-  const photoH = 350;
-  if (img) {
-    drawPhoto(ctx, img, M, 66, photoW, photoH, 30, 0.32);
-    ctx.fillStyle = "rgba(8,8,10,0.28)";
-    roundRect(ctx, M, 66, photoW, photoH, 30);
-    ctx.fill();
-  } else {
-    fillRound(ctx, M, 66, photoW, photoH, 30, P.panel);
-  }
-  // 사진 위 라벨
-  const label = "02 · 왜 지금 뜨나";
-  setFont(ctx, 900, 28);
-  const labelW = ctx.measureText(label).width + 52;
-  fillRound(ctx, M + 26, 96, labelW, 50, 25, "rgba(8,8,10,0.72)");
-  ctx.fillStyle = P.accent;
-  ctx.textBaseline = "middle";
-  ctx.fillText(label, M + 52, 96 + 27);
-  ctx.textBaseline = "top";
-
-  // 인용 부호
-  ctx.fillStyle = P.accentText;
-  setFont(ctx, 900, 170);
-  ctx.textAlign = "left";
-  ctx.fillText("“", M - 4, 428);
-
-  // 핵심 쟁점 박스 — 내용 길이에 맞춰 높이를 잡고 아래쪽에 고정합니다.
-  const point = issue.point || issue.poll.question;
-  const pointFit = fitHeading(ctx, point, CARD_W - M * 2 - 80, 3, 50, 34, 900);
-  const pointH = pointFit.lines.length * pointFit.size * 1.3;
-  const chipsH = issue.sides && issue.sides.labelA && issue.sides.labelB ? 46 : 0;
-  const boxH = 30 + 30 + 16 + pointH + (chipsH ? 18 + chipsH : 0) + 34;
-  const boxTop = CARD_H - 150 - boxH;
-
-  // 배경 문장 — 인용 부호와 쟁점 박스 사이에 놓고 세로 가운데로 맞춥니다.
-  const background = issue.background || issue.kicker;
-  const body = fitHeading(ctx, background, CARD_W - M * 2 - 10, 4, 44, 32, 600);
-  setFont(ctx, 600, body.size);
-  const bodyHeight = body.lines.length * body.size * 1.62;
-  const areaTop = 566;
-  const areaBottom = boxTop - 40;
-  const bodyTop = areaTop + Math.max(0, (areaBottom - areaTop - bodyHeight) / 2);
-  ctx.fillStyle = alpha(P.fg, 0.88);
-  drawLines(ctx, body.lines, M + 4, bodyTop, body.size * 1.62);
-
-  fillRound(ctx, M, boxTop, CARD_W - M * 2, boxH, 30, P.panel);
-  strokeRound(ctx, M, boxTop, CARD_W - M * 2, boxH, 30, P.accentText, 2);
-  ctx.fillStyle = P.accentText;
-  ctx.fillRect(M, boxTop + 26, 8, boxH - 52);
-
-  ctx.fillStyle = P.accentText;
-  setFont(ctx, 900, 26);
-  ctx.fillText("핵심 쟁점", M + 36, boxTop + 30);
-
-  setFont(ctx, 900, pointFit.size);
-  ctx.fillStyle = P.fg;
-  drawLines(ctx, pointFit.lines, M + 36, boxTop + 76, pointFit.size * 1.3);
-
-  // A / B 라벨 미리보기
-  if (chipsH > 0 && issue.sides) {
-    const chipY = boxTop + boxH - 34 - chipsH;
-    setFont(ctx, 800, 24);
-    const textA = `A ${issue.sides.labelA}`;
-    const textB = `B ${issue.sides.labelB}`;
-    const widthA = ctx.measureText(textA).width + 40;
-    const widthB = ctx.measureText(textB).width + 40;
-    if (widthA + widthB + 14 < CARD_W - M * 2 - 72) {
-      fillRound(ctx, M + 36, chipY, widthA, chipsH, 23, P.accent);
-      fillRound(ctx, M + 50 + widthA, chipY, widthB, chipsH, 23, P.alt);
-      ctx.fillStyle = P.onAccent;
-      ctx.textBaseline = "middle";
-      ctx.fillText(textA, M + 56, chipY + chipsH / 2 + 1);
-      ctx.fillStyle = P.onAlt;
-      ctx.fillText(textB, M + 70 + widthA, chipY + chipsH / 2 + 1);
-      ctx.textBaseline = "top";
-    }
-  }
-
-  footer(ctx, 2, "paper", `${issue.source} 보도 · ${timeAgo(issue.publishedAt)}`);
-  themeChrome(ctx);
-}
-
-/* ------------------------------------------------------------------ slide 4 */
-
-function drawSides(ctx: Ctx, issue: Issue, accent: string): void {
-  posterBase(ctx, accent);
-  bottomScrim(ctx, 500, 0.85);
-  brandTop(ctx, "photo");
-
-  ctx.fillStyle = P.accentText;
-  ctx.beginPath();
-  ctx.arc(M + 8, 178, 8, 0, Math.PI * 2);
-  ctx.fill();
-  setFont(ctx, 900, 30);
-  ctx.fillStyle = P.fg;
-  ctx.fillText("03 · 어디서 갈렸나", M + 26, 158);
-
-  const sides = issue.sides;
-  // 쟁점 한 줄이 A 진영 주장과 같은 말이면(데이터에 따라 흔함) 반복하지 않고 질문으로 대신합니다.
-  const sameWords = (a: string, b: string): boolean => {
-    const x = a.replace(/\s+/g, "");
-    const y = b.replace(/\s+/g, "");
-    if (x.length < 10 || y.length < 10) return false;
-    return x === y || x.includes(y) || y.includes(x) || x.slice(0, 16) === y.slice(0, 16);
-  };
-  const claimA = sides?.a || issue.poll.a;
-  const claimB = sides?.b || issue.poll.b;
-  let lead = issue.point || issue.poll.question;
-  if (sameWords(lead, claimA) || sameWords(lead, claimB)) lead = issue.poll.question;
-  if (sameWords(lead, claimA) || sameWords(lead, claimB)) lead = "";
-
-  let afterLead = 214;
-  if (lead) {
-    const leadFit = fitHeading(ctx, lead, CARD_W - M * 2, 2, 46, 34, 800);
-    setFont(ctx, 800, leadFit.size);
-    ctx.fillStyle = alpha(P.fg, 0.82);
-    afterLead = drawLines(ctx, leadFit.lines, M, 214, leadFit.size * 1.32);
-  }
-
-  const panelTop = Math.min(afterLead + 34, 380);
-  const panelH = Math.min(370, Math.floor((CARD_H - 300 - panelTop - 110) / 2));
-  const panelW = CARD_W - M * 2;
-  // AI 정리가 없으면 라벨이 "A"뿐이라 "A · A"처럼 겹치지 않게 비워 둡니다.
-  const labelA = sides?.labelA || "";
-  const labelB = sides?.labelB || "";
-  const labelTextA = labelA ? `A · ${labelA}` : "A";
-  const labelTextB = labelB ? `B · ${labelB}` : "B";
-
-  // A 패널
-  fillRound(ctx, M, panelTop, panelW, panelH, 32, P.accent);
-  ctx.fillStyle = alpha(P.onAccent, 0.09);
-  setFont(ctx, 900, 320);
-  ctx.textAlign = "right";
-  ctx.textBaseline = "top";
-  ctx.fillText("A", M + panelW - 30, panelTop + panelH - 300);
-  ctx.textAlign = "left";
-  ctx.fillStyle = alpha(P.onAccent, 0.6);
-  setFont(ctx, 800, 26);
-  ctx.fillText(labelTextA, M + 42, panelTop + 32);
-  const aFit = fitHeading(ctx, claimA, panelW - 84, 3, 50, 32, 900);
-  setFont(ctx, 900, aFit.size);
-  ctx.fillStyle = P.onAccent;
-  const aHeight = aFit.lines.length * aFit.size * 1.34;
-  drawLines(ctx, aFit.lines, M + 42, panelTop + 92 + Math.max(0, (panelH - 130 - aHeight) / 2), aFit.size * 1.34);
-
-  // VS 배지
-  const vsY = panelTop + panelH + 22;
-  ctx.fillStyle = P.solid;
-  ctx.beginPath();
-  ctx.arc(CARD_W / 2, vsY + 58, 58, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = P.accent;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(CARD_W / 2, vsY + 58, 58, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.fillStyle = P.onSolid;
-  setFont(ctx, 900, 34);
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("VS", CARD_W / 2, vsY + 60);
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-
-  // B 패널
-  const panelBTop = vsY + 138;
-  fillRound(ctx, M, panelBTop, panelW, panelH, 32, P.alt);
-  ctx.fillStyle = alpha(P.onAlt, 0.1);
-  setFont(ctx, 900, 320);
-  ctx.textAlign = "right";
-  ctx.textBaseline = "top";
-  ctx.fillText("B", M + panelW - 30, panelBTop + panelH - 300);
-  ctx.textAlign = "left";
-  ctx.fillStyle = alpha(P.onAlt, 0.6);
-  setFont(ctx, 800, 26);
-  ctx.fillText(labelTextB, M + 42, panelBTop + 32);
-  const bFit = fitHeading(ctx, claimB, panelW - 84, 3, 50, 32, 900);
-  setFont(ctx, 900, bFit.size);
-  ctx.fillStyle = P.onAlt;
-  const bHeight = bFit.lines.length * bFit.size * 1.34;
-  drawLines(ctx, bFit.lines, M + 42, panelBTop + 92 + Math.max(0, (panelH - 130 - bHeight) / 2), bFit.size * 1.34);
-
-  const call = "당신은 어느 쪽? 넘겨서 투표";
-  const callW = 500;
-  fillRound(ctx, CARD_W / 2 - callW / 2, CARD_H - 208, callW, 56, 28, P.panel);
-  ctx.fillStyle = P.fg;
-  setFont(ctx, 800, 26);
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(call, CARD_W / 2, CARD_H - 180);
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-
-  footer(ctx, 3, "paper");
-  themeChrome(ctx);
-}
-
-/* ------------------------------------------------------------------ slide 5 */
-
-function drawVote(ctx: Ctx, issue: Issue, accent: string, img: HTMLImageElement | null): void {
-  // 위: 기사 사진 + 질문 / 아래: 강조색 패널 + 선택지 + 댓글 유도
-  const panelTop = 620;
-
-  posterBase(ctx, accent);
-  if (img) {
-    drawPhoto(ctx, img, 0, 0, CARD_W, panelTop + 40, 0, 0.36);
-  }
-  topScrim(ctx, 300);
-  const fade = ctx.createLinearGradient(0, panelTop - 260, 0, panelTop + 10);
-  fade.addColorStop(0, `rgba(${P.scrim},0.05)`);
-  fade.addColorStop(1, `rgba(${P.scrim},0.92)`);
-  ctx.fillStyle = fade;
-  ctx.fillRect(0, panelTop - 260, CARD_W, 270);
-
-  // 사진 위 라벨
-  ctx.fillStyle = P.accentText;
-  ctx.beginPath();
-  ctx.arc(M + 8, 110, 8, 0, Math.PI * 2);
-  ctx.fill();
-  setFont(ctx, 900, 30);
-  ctx.fillStyle = P.photoInk;
-  ctx.fillText("04 · 당신의 선택", M + 26, 90);
-
-  const question = issue.poll.question;
-  const qFit = fitHeading(ctx, question, CARD_W - M * 2, 3, 76, 46, 900);
-  setFont(ctx, 900, qFit.size);
-  const qTop = 158;
-  ctx.shadowColor = isLight(P.paper) ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.5)";
-  ctx.shadowBlur = 24;
-  ctx.shadowOffsetY = 3;
-  ctx.fillStyle = P.photoInk;
-  drawLines(ctx, qFit.lines, M, qTop, qFit.size * 1.1);
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetY = 0;
-
-  // 아래 강조 패널
-  const panel = ctx.createLinearGradient(0, panelTop, 0, CARD_H);
-  panel.addColorStop(0, P.accent);
-  panel.addColorStop(1, P.accentDeep);
-  ctx.fillStyle = panel;
-  roundRect(ctx, -40, panelTop, CARD_W + 80, CARD_H - panelTop + 80, 46);
-  ctx.fill();
-
-  // 패널 안 워터마크
-  ctx.fillStyle = alpha(P.onAccent, 0.07);
-  setFont(ctx, 900, 380);
-  ctx.textAlign = "right";
-  ctx.textBaseline = "top";
-  ctx.fillText("A/B", CARD_W - M + 30, CARD_H - 430);
-  ctx.textAlign = "left";
-
-  // 질문 아래 한 줄 맥락
-  const context = issue.point && issue.point.trim() !== question.trim() ? issue.point : issue.kicker;
-  if (context) {
-    const contextFit = fitHeading(ctx, context, CARD_W - M * 2, 2, 36, 26, 700);
-    setFont(ctx, 700, contextFit.size);
-    ctx.fillStyle = alpha(P.onAccent, 0.7);
-    drawLines(ctx, contextFit.lines, M, panelTop + 34, contextFit.size * 1.36);
-  }
-
-  const options = [
-    { key: "A", text: issue.poll.a },
-    { key: "B", text: issue.poll.b },
-  ];
-  let optionTop = panelTop + 120;
-  for (const option of options) {
-    const rowH = 112;
-    fillRound(ctx, M, optionTop, CARD_W - M * 2, rowH, 22, "rgba(255,255,255,0.5)");
-    strokeRound(ctx, M, optionTop, CARD_W - M * 2, rowH, 22, alpha(P.onAccent, 0.9), 3);
-    fillRound(ctx, M + 20, optionTop + 21, 74, 74, 18, P.solid);
-    ctx.fillStyle = P.onSolid;
-    setFont(ctx, 900, 36);
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(option.key, M + 57, optionTop + 60);
-    ctx.textAlign = "left";
-
-    setFont(ctx, 800, 42);
-    ctx.fillStyle = P.onAccent;
-    const textLines = wrapText(ctx, option.text, CARD_W - M * 2 - 150, 1);
-    ctx.fillText(textLines[0] ?? "", M + 120, optionTop + 56);
-    ctx.textBaseline = "top";
-    optionTop += rowH + 14;
-  }
-
-  // 댓글 유도 엔딩 카드
-  const ctaMinH = 196;
-  const ctaTop = Math.min(optionTop + 22, CARD_H - 150 - ctaMinH);
-  const ctaH = CARD_H - 150 - ctaTop;
-  fillRound(ctx, M, ctaTop, CARD_W - M * 2, ctaH, 30, P.solid);
-
-  // 말풍선
-  ctx.fillStyle = P.alt;
-  roundRect(ctx, M + 36, ctaTop + 34, 62, 52, 16);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(M + 54, ctaTop + 84);
-  ctx.lineTo(M + 74, ctaTop + 104);
-  ctx.lineTo(M + 84, ctaTop + 84);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = P.onAlt;
-  setFont(ctx, 900, 26);
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("···", M + 67, ctaTop + 60);
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-
-  ctx.fillStyle = popOnSolid();
-  setFont(ctx, 900, 38);
-  ctx.fillText("댓글로 A 아니면 B", M + 120, ctaTop + 38);
-  setFont(ctx, 700, 26);
-  ctx.fillStyle = alpha(P.onSolid, 0.7);
-  ctx.fillText("이유도 한 줄 남기면 토론이 붙어요", M + 120, ctaTop + 96);
-
-  setFont(ctx, 800, 27);
-  ctx.fillStyle = alpha(P.onSolid, 0.55);
-  ctx.fillText("저장해 두고 다시 보기 · 프로필 링크에서 바로 투표", M + 36, ctaTop + ctaH - 52);
-
-  footer(ctx, 4, "accent", "원문 기사 링크는 프로필에");
-  themeChrome(ctx);
-}
-
-/* ------------------------------------------------------------------ export */
-
-async function ensureFonts(): Promise<void> {
-  if (typeof document === "undefined" || !document.fonts) return;
-  try {
-    await Promise.all([
-      document.fonts.load(`900 96px ${SANS}`, "가나다라마바사 1234%"),
-      document.fonts.load(`800 48px ${SANS}`, "가나다라마바사 1234%"),
-      document.fonts.load(`700 40px ${SANS}`, "가나다라마바사 1234%"),
-      document.fonts.load(`600 32px ${SANS}`, "가나다라마바사 1234%"),
-    ]);
-    await document.fonts.ready;
-  } catch {
-    /* 폰트를 못 받아도 기본 글꼴로 그립니다 */
-  }
-}
-
-/** 폰트는 한 번만 받아 오면 됩니다 — 카드 5장을 그릴 때마다 기다리지 않습니다. */
-let fontsTask: Promise<void> | null = null;
-function ensureFontsOnce(): Promise<void> {
-  if (!fontsTask) fontsTask = ensureFonts();
-  return fontsTask;
+/** 분야별 실사 사진 풀에서 한 장 — 기사 사진이 없을 때 카드·썸네일이 빈 칸이 되지 않게. */
+export function fallbackPhoto(issue: Issue, offset = 0): string {
+  return poolSrc(issue.category, issue.id || issue.title, offset);
 }
 
 const imageCache = new Map<string, Promise<HTMLImageElement | null>>();
@@ -1302,9 +361,8 @@ function loadOne(src: string, crossOrigin: boolean): Promise<HTMLImageElement | 
 
 /**
  * 기사 사진을 캔버스에 그릴 수 있는 형태로 가져옵니다.
- * ① 같은 출처 프록시(/api/img) → ② 원본 직접(CORS 허용 시) → ③ 없음(포스터 배경).
+ * ① 원본 직접(CORS 허용 시) → ② 같은 출처 프록시(/api/img) → ③ 없음.
  * 프록시를 거치지 않으면 언론사 서버가 CORS 헤더를 안 줄 때 캔버스가 오염돼 PNG 저장이 막힙니다.
- * 어느 쪽도 실패하면 사진 없이 그래픽 카드로 그려 저장이 막히지 않습니다.
  */
 export function loadIssueImage(src: string): Promise<HTMLImageElement | null> {
   if (!src) return Promise.resolve(null);
@@ -1317,6 +375,1075 @@ export function loadIssueImage(src: string): Promise<HTMLImageElement | null> {
   })();
   imageCache.set(src, task);
   return task;
+}
+
+/** 카드 한 장마다 사진 후보를 다시 받아 오지 않도록, 이슈 단위로 결과를 기억합니다. */
+const platesCache = new Map<string, Promise<Plate[]>>();
+
+function resolvePlates(issue: Issue): Promise<Plate[]> {
+  const key = `${issue.id}|${issue.image}|${(issue.images ?? []).join(",")}|${issue.category}`;
+  const cached = platesCache.get(key);
+  if (cached) return cached;
+  const task = loadPlates(issue);
+  platesCache.set(key, task);
+  if (platesCache.size > 48) {
+    const first = platesCache.keys().next().value;
+    if (first) platesCache.delete(first);
+  }
+  return task;
+}
+
+/** 이 카드에 쓸 사진 — 기사 사진(대표·본문)이 있으면 그것만, 없을 때만 분야별 실사 사진으로 채웁니다. */
+async function loadPlates(issue: Issue): Promise<Plate[]> {
+  const sources: string[] = [];
+  for (const src of [...(issue.images ?? []), issue.image]) {
+    if (src && !sources.includes(src)) sources.push(src);
+  }
+
+  const plates: Plate[] = [];
+  const loaded = await Promise.all(sources.slice(0, 3).map((src) => loadIssueImage(src)));
+  loaded.forEach((img, index) => {
+    // 기자 프로필 같은 작은 사진은 카드에 깔지 않습니다(원본이 320px보다 작으면 확대해도 못 씁니다).
+    if (!img || img.naturalWidth < 320 || plates.length >= 2) return;
+    const src = sources[index];
+    plates.push({ img, src, stock: isStockSrc(src) });
+  });
+  // 기사 사진이 한 장이라도 있으면 그것만 씁니다 — 관계없는 자료사진으로 카드를 채우지 않습니다.
+  if (plates.length > 0) return plates;
+
+  for (let offset = 0; offset < 3 && plates.length < 3; offset += 1) {
+    const src = poolSrc(issue.category, issue.id || issue.title, offset);
+    if (plates.some((plate) => plate.src === src)) continue;
+    const img = await loadOne(src, true);
+    if (img) plates.push({ img, src, stock: true });
+  }
+  return plates;
+}
+
+function plateFor(index: number): Plate | null {
+  if (PLATES.length === 0) return null;
+  if (index < PLATES.length) return PLATES[index];
+  return PLATES[0];
+}
+function coverRect(img: HTMLImageElement, w: number, h: number, focusY = 0.42) {
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+  const scale = Math.max(w / iw, h / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  return { x: (w - dw) / 2, y: (h - dh) * focusY, w: dw, h: dh };
+}
+
+function drawPhoto(
+  ctx: Ctx,
+  img: HTMLImageElement | null,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius = 0,
+  focusY = 0.42,
+): void {
+  if (!img) return;
+  ctx.save();
+  if (radius > 0) {
+    roundRect(ctx, x, y, w, h, radius);
+    ctx.clip();
+  } else {
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+  }
+  const rect = coverRect(img, w, h, focusY);
+  ctx.drawImage(img, x + rect.x, y + rect.y, rect.w, rect.h);
+  ctx.restore();
+}
+
+/** 테마별 사진 위 색 — 네 테마가 같은 사진을 써도 다른 잡지처럼 보이게. */
+function tintPhoto(ctx: Ctx, x: number, y: number, w: number, h: number): void {
+  const color =
+    P.id === "breaking"
+      ? "rgba(140,10,8,0.30)"
+      : P.id === "pastel"
+        ? "rgba(255,186,206,0.20)"
+        : P.id === "modern"
+          ? "rgba(246,243,236,0.06)"
+          : "rgba(10,10,12,0.10)";
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, w, h);
+}
+
+/** 모던·파스텔은 사진을 종이 액자 안에 넣습니다 — 표지 색이 테마마다 확실히 달라집니다. */
+function frameInset(): number {
+  if (P.id === "modern") return 44;
+  if (P.id === "pastel") return 28;
+  return 0;
+}
+
+/** 화면 밖에 작은 캔버스로 줄여 그린 뒤 크게 늘려 그리는 방식 — 어느 브라우저에서나 부드러운 배경 흐림이 됩니다. */
+function drawBlurFill(ctx: Ctx, img: HTMLImageElement, x: number, y: number, w: number, h: number): void {
+  const sw = 64;
+  const sh = Math.max(1, Math.round((sw * h) / w));
+  const small = document.createElement("canvas");
+  small.width = sw;
+  small.height = sh;
+  const sctx = small.getContext("2d");
+  if (!sctx) return;
+  const rect = coverRect(img, sw, sh, 0.4);
+  sctx.drawImage(img, rect.x, rect.y, rect.w, rect.h);
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(small, 0, 0, sw, sh, x, y, w, h);
+  ctx.restore();
+}
+
+/**
+ * 언론사 사진은 대부분 가로로 작습니다(800×450 정도). 그대로 4:5로 늘리면 3배 확대돼 뿌옇습니다.
+ * 그래서 작은 가로 사진은 "사진 창"으로 그립니다 — 카드 전체는 같은 사진을 크게 흐린 배경으로 깔고,
+ * 가운데에 원본 비율 그대로의 선명한 사진 띠를 놓습니다. 사진이 선명하고, 빈 색면도 생기지 않습니다.
+ */
+function needsPhotoWindow(img: HTMLImageElement): boolean {
+  const w = img.naturalWidth || 1;
+  const h = img.naturalHeight || 1;
+  return w < 860 && w / h > 1.06;
+}
+
+/** 카드 전체를 사진으로 채우는 판(표지·인용 카드) — 필요하면 선명한 사진 창을 함께 그립니다. */
+function drawFullPlate(ctx: Ctx, plate: Plate | null, focusY = 0.34): void {
+  fillRect(ctx, 0, 0, CARD_W, CARD_H, P.paper);
+  if (!plate) {
+    const glow = ctx.createLinearGradient(0, 0, CARD_W, CARD_H);
+    glow.addColorStop(0, hexWith(P.accent, P.id === "modern" || P.id === "pastel" ? "40" : "22"));
+    glow.addColorStop(1, hexWith(P.solid, "00"));
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, CARD_W, CARD_H);
+    return;
+  }
+  const img = plate.img;
+  if (!needsPhotoWindow(img)) {
+    drawPhoto(ctx, img, 0, 0, CARD_W, CARD_H, 0, focusY);
+    tintPhoto(ctx, 0, 0, CARD_W, CARD_H);
+    return;
+  }
+
+  drawBlurFill(ctx, img, 0, 0, CARD_W, CARD_H);
+  ctx.fillStyle = P.id === "modern" || P.id === "pastel" ? "rgba(246,243,236,0.2)" : "rgba(8,8,10,0.46)";
+  ctx.fillRect(0, 0, CARD_W, CARD_H);
+  tintPhoto(ctx, 0, 0, CARD_W, CARD_H);
+
+  const aspect = img.naturalWidth / img.naturalHeight;
+  const bandH = Math.min(790, Math.round(CARD_W / aspect));
+  const top = Math.round((CARD_H - bandH) * Math.min(0.44, Math.max(0.24, focusY)));
+  drawPhoto(ctx, img, 0, top, CARD_W, bandH, 0, 0.5);
+  ctx.fillStyle = alpha(ON_PHOTO, 0.22);
+  ctx.fillRect(0, top, CARD_W, 1);
+  ctx.fillRect(0, top + bandH - 1, CARD_W, 1);
+}
+
+function bottomScrim(ctx: Ctx, from: number, strength = 0.97): void {
+  const grad = ctx.createLinearGradient(0, from, 0, CARD_H);
+  grad.addColorStop(0, `rgba(${P.scrim},0)`);
+  grad.addColorStop(0.42, `rgba(${P.scrim},${strength * 0.6})`);
+  grad.addColorStop(0.75, `rgba(${P.scrim},${strength * 0.92})`);
+  grad.addColorStop(1, `rgba(${P.scrim},${strength})`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, from, CARD_W, CARD_H - from);
+}
+
+function bandFade(ctx: Ctx, from: number, height: number, to = P.paper): void {
+  const grad = ctx.createLinearGradient(0, from, 0, from + height);
+  grad.addColorStop(0, hexWith(to, "00"));
+  grad.addColorStop(1, to);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, from, CARD_W, height);
+}
+
+function topScrim(ctx: Ctx, height = 300): void {
+  const grad = ctx.createLinearGradient(0, 0, 0, height);
+  grad.addColorStop(0, `rgba(${P.scrim},0.82)`);
+  grad.addColorStop(1, `rgba(${P.scrim},0)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, CARD_W, height);
+}
+
+function photoShadow(ctx: Ctx, on: boolean): void {
+  if (!on) {
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+    return;
+  }
+  ctx.shadowColor = "rgba(0,0,0,0.55)";
+  ctx.shadowBlur = 24;
+  ctx.shadowOffsetY = 3;
+}
+
+/* ------------------------------------------------------------- 공통 표식 */
+
+function brandDot(ctx: Ctx, x: number, y: number, color: string): void {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x, y, 7, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function brandTop(ctx: Ctx, color = ON_PHOTO): void {
+  brandDot(ctx, M + 8, 92, photoAccent());
+  setFont(ctx, 800, 27);
+  ctx.fillStyle = color;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(brandName(), M + 28, 93);
+  ctx.textBaseline = "top";
+}
+
+/** 분야 라벨 — 작은 사각 점 + 자간 넓은 라벨. 테마 색으로 잡지 지면처럼. */
+function categoryMark(ctx: Ctx, issue: Issue, y: number, color: string, size = 24): void {
+  const meta = CATEGORY_META[issue.category];
+  ctx.fillStyle = meta.color;
+  ctx.fillRect(M, y + 2, 10, size - 4);
+  setFont(ctx, 800, size);
+  setTracking(ctx, 2.4);
+  ctx.fillStyle = color;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(meta.label, M + 22, y);
+  setTracking(ctx, 0);
+}
+
+/** 온도·화제성 — 알약 대신 숫자와 작은 화살표로. */
+function heatMark(ctx: Ctx, issue: Issue, y: number, color: string): void {
+  const score = issue.temp ?? issue.buzz ?? 0;
+  const label = issue.temp !== null ? `논란 ${score}°` : `화제 ${score}`;
+  setFont(ctx, 900, 26);
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = color;
+  ctx.fillText(label, CARD_W - M, y);
+  const width = ctx.measureText(label).width;
+  ctx.fillStyle = alpha(photoAccent(), 0.5);
+  ctx.fillRect(CARD_W - M - width, y + 34, width, 2);
+  ctx.textAlign = "left";
+}
+
+function footer(ctx: Ctx, index: number, mode: "photo" | "paper", note?: string): void {
+  const ink = mode === "photo" ? ON_PHOTO_FAINT : alpha(P.fg, 0.5);
+  setFont(ctx, 700, 22);
+  ctx.fillStyle = ink;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  setTracking(ctx, 0.6);
+  ctx.fillText(note ? `${brandName()} · ${note}` : brandName(), M, CARD_H - 58);
+  setTracking(ctx, 0);
+  ctx.textAlign = "right";
+  ctx.fillText(`${index + 1} / ${SLIDE_COUNT}`, CARD_W - M, CARD_H - 58);
+  ctx.textAlign = "left";
+}
+
+function sourceLine(ctx: Ctx, issue: Issue, plate: Plate | null, y: number, color: string): void {
+  const credit = plate?.stock ? " · 자료사진" : "";
+  setFont(ctx, 700, 25);
+  ctx.fillStyle = color;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(`${issue.source} · ${timeAgo(issue.publishedAt)}${credit}`, M, y);
+  ctx.textAlign = "left";
+}
+
+function swipe(ctx: Ctx, text: string, y: number, color: string): void {
+  setFont(ctx, 800, 25);
+  ctx.fillStyle = color;
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  ctx.fillText(text, CARD_W - M, y);
+  ctx.textAlign = "left";
+}
+
+function stepLabel(ctx: Ctx, text: string, y: number, color: string): void {
+  setFont(ctx, 800, 23);
+  setTracking(ctx, 2.6);
+  ctx.fillStyle = color;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(text, M, y);
+  setTracking(ctx, 0);
+}
+
+/* ------------------------------------------------------------------ covers */
+
+/** 사진 띠(표지 아래지면·내지)·스트립처럼 일부 영역만 사진으로 채우는 판. */
+function drawBand(ctx: Ctx, plate: Plate | null, x: number, y: number, w: number, h: number, focusY = 0.42): void {
+  fillRect(ctx, x, y, w, h, P.paper);
+  if (!plate) {
+    const glow = ctx.createLinearGradient(x, y, x + w, y + h);
+    glow.addColorStop(0, hexWith(P.accent, P.id === "modern" || P.id === "pastel" ? "40" : "22"));
+    glow.addColorStop(1, hexWith(P.solid, "00"));
+    ctx.fillStyle = glow;
+    ctx.fillRect(x, y, w, h);
+    return;
+  }
+  drawPhoto(ctx, plate.img, x, y, w, h, 0, focusY);
+  tintPhoto(ctx, x, y, w, h);
+}
+
+function coverBase(ctx: Ctx, plate: Plate | null, focusY: number): number {
+  const inset = frameInset();
+  fillRect(ctx, 0, 0, CARD_W, CARD_H, P.paper);
+  if (inset > 0) {
+    drawBand(ctx, plate, inset, inset, CARD_W - inset * 2, CARD_H - inset * 2, focusY);
+  } else {
+    drawFullPlate(ctx, plate, focusY);
+  }
+  return inset;
+}
+
+/** ① 포토 헤드라인 — 사진 전체 + 아래에서 올라오는 굵은 제목. */
+function drawCoverOverlay(ctx: Ctx, issue: Issue, plate: Plate | null): void {
+  coverBase(ctx, plate, 0.34);
+  topScrim(ctx, 300);
+  bottomScrim(ctx, 520, 0.99);
+
+  brandTop(ctx);
+  categoryMark(ctx, issue, 150, ON_PHOTO_DIM);
+  heatMark(ctx, issue, 152, photoAccent());
+
+  const sourceY = CARD_H - 106;
+  const ruleY = CARD_H - 148;
+  const kickerFit = fitRegion(ctx, issue.kicker, {
+    w: CARD_W - M * 2,
+    h: 106,
+    max: 31,
+    min: 23,
+    weight: 700,
+    lineFactor: 1.42,
+    maxLines: 2,
+  });
+  const kickerTop = ruleY - 22 - kickerFit.height;
+  const headBottom = kickerTop - 42;
+  const headTop = 318;
+  const headFit = fitRegion(ctx, issue.hook, {
+    w: CARD_W - M * 2,
+    h: Math.max(220, headBottom - headTop),
+    max: 102,
+    min: 56,
+    weight: 900,
+    lineFactor: 1.08,
+    maxLines: 4,
+  });
+  const headY = headBottom - headFit.height;
+
+  fillRect(ctx, M, ruleY, 118, 8, photoAccent());
+  photoShadow(ctx, true);
+  drawEmphasisLines(ctx, headFit.lines, M, headY, headFit.size, headFit.lineHeight, {
+    color: ON_PHOTO,
+    hot: photoAccent(),
+  });
+  photoShadow(ctx, false);
+
+  setFont(ctx, 700, kickerFit.size);
+  ctx.fillStyle = ON_PHOTO_DIM;
+  drawLines(ctx, kickerFit.lines, M, kickerTop, kickerFit.lineHeight);
+
+  sourceLine(ctx, issue, plate, sourceY, ON_PHOTO_FAINT);
+  swipe(ctx, "밀어서 팩트 3줄 →", sourceY, photoAccent());
+  footer(ctx, 0, "photo");
+}
+
+/** ② 한마디 — 기사에 실제로 있던 인용을 주인공으로. */
+function drawCoverQuote(ctx: Ctx, issue: Issue, plate: Plate | null): void {
+  coverBase(ctx, plate, 0.3);
+  ctx.fillStyle = "rgba(8,8,10,0.46)";
+  ctx.fillRect(0, 0, CARD_W, CARD_H);
+  topScrim(ctx, 260);
+  bottomScrim(ctx, 820, 0.94);
+
+  brandTop(ctx);
+  categoryMark(ctx, issue, 150, ON_PHOTO_DIM);
+  heatMark(ctx, issue, 152, photoAccent());
+
+  const quote = quoteOf(issue) || issue.kicker || issue.hook;
+  const quoteFit = fitRegion(ctx, quote, {
+    w: CARD_W - M * 2,
+    h: 380,
+    max: 92,
+    min: 52,
+    weight: 900,
+    lineFactor: 1.22,
+    maxLines: 4,
+  });
+  const sub = issue.hook !== quote ? issue.hook : issue.kicker;
+  const subFit = fitRegion(ctx, sub, {
+    w: CARD_W - M * 2,
+    h: 108,
+    max: 42,
+    min: 28,
+    weight: 700,
+    lineFactor: 1.38,
+    maxLines: 2,
+  });
+
+  // 인용·선·부제를 한 덩어리로 보고 지면 가운데에 놓습니다 — 위에만 몰리고 아래가 비지 않게.
+  const blockH = 40 + quoteFit.height + 44 + 10 + 40 + subFit.height;
+  const areaTop = 300;
+  const areaBottom = CARD_H - 150;
+  const top = areaTop + Math.max(0, (areaBottom - areaTop - blockH) / 2);
+
+  fillRect(ctx, M, top, 62, 10, photoAccent());
+  fillRect(ctx, M, top + 22, 62, 10, photoAccent());
+
+  const quoteTop = top + 40;
+  setFont(ctx, 900, quoteFit.size);
+  ctx.fillStyle = ON_PHOTO;
+  photoShadow(ctx, true);
+  drawLines(ctx, quoteFit.lines, M, quoteTop, quoteFit.lineHeight);
+  photoShadow(ctx, false);
+
+  const ruleY = quoteTop + quoteFit.height + 40;
+  fillRect(ctx, M, ruleY, 148, 8, photoAccent());
+
+  setFont(ctx, 700, subFit.size);
+  ctx.fillStyle = ON_PHOTO;
+  photoShadow(ctx, true);
+  drawLines(ctx, subFit.lines, M, ruleY + 40, subFit.lineHeight);
+  photoShadow(ctx, false);
+
+  const sourceY = CARD_H - 106;
+  sourceLine(ctx, issue, plate, sourceY, ON_PHOTO_FAINT);
+  swipe(ctx, "넘겨서 팩트 3줄 →", sourceY, photoAccent());
+  footer(ctx, 0, "photo");
+}
+
+/** ③ 숫자 — 사진 띠 + 아래 지면에 기사 속 숫자 하나를 거대하게. 칸을 고정해 글자가 겹치지 않습니다. */
+function drawCoverStat(ctx: Ctx, issue: Issue, plate: Plate | null): void {
+  const bandH = 560;
+  fillRect(ctx, 0, 0, CARD_W, CARD_H, P.paper);
+  drawBand(ctx, plate, 0, 0, CARD_W, bandH, 0.32);
+  topScrim(ctx, 280);
+  bottomScrim(ctx, bandH - 260, 0.86);
+  bandFade(ctx, bandH - 120, 120, P.paper);
+
+  brandTop(ctx);
+  categoryMark(ctx, issue, 150, ON_PHOTO_DIM);
+  heatMark(ctx, issue, 152, photoAccent());
+
+  // 사진 위에는 이 카드가 무엇을 보는지 한 줄만.
+  stepLabel(ctx, "숫자로 보기", bandH - 78, ON_PHOTO_DIM);
+
+  fillRect(ctx, 0, bandH, CARD_W, 6, P.accentText);
+
+  const stat = headlineStat(issue);
+  if (stat) {
+    let valueSize = 206;
+    setFont(ctx, 900, valueSize);
+    while (valueSize > 110 && ctx.measureText(stat.value).width + 150 > CARD_W - M * 2) {
+      valueSize -= 10;
+      setFont(ctx, 900, valueSize);
+    }
+    const valueWidth = ctx.measureText(stat.value).width;
+    const top = bandH + 84;
+    ctx.fillStyle = P.accentText;
+    ctx.textBaseline = "top";
+    ctx.fillText(stat.value, M, top);
+    setFont(ctx, 900, Math.round(valueSize * 0.36));
+    ctx.fillText(stat.unit, M + valueWidth + 14, top + Math.round(valueSize * 0.5));
+  } else {
+    setFont(ctx, 900, 74);
+    ctx.fillStyle = alpha(P.fg, 0.3);
+    ctx.fillText("오늘의 숫자", M, bandH + 96);
+  }
+
+  // 제목은 숫자 아래 지면에 — 사진 위 헤드라인과 겹치지 않습니다.
+  const headFit = fitRegion(ctx, issue.hook, {
+    w: CARD_W - M * 2,
+    h: 130,
+    max: 52,
+    min: 34,
+    weight: 900,
+    lineFactor: 1.18,
+    maxLines: 2,
+  });
+  drawEmphasisLines(ctx, headFit.lines, M, 900, headFit.size, headFit.lineHeight, {
+    color: P.fg,
+    hot: P.accentText,
+  });
+
+  const context = issue.point || issue.kicker;
+  const contextFit = fitRegion(ctx, context, {
+    w: CARD_W - M * 2,
+    h: 96,
+    max: 34,
+    min: 24,
+    weight: 700,
+    lineFactor: 1.38,
+    maxLines: 2,
+  });
+  setFont(ctx, 700, contextFit.size);
+  ctx.fillStyle = alpha(P.fg, 0.62);
+  drawLines(ctx, contextFit.lines, M, 1052, contextFit.lineHeight);
+
+  sourceLine(ctx, issue, plate, CARD_H - 106, alpha(P.fg, 0.5));
+  swipe(ctx, "전체 팩트 →", CARD_H - 106, P.accentText);
+  footer(ctx, 0, "paper");
+}
+
+/** ④ 포토 스트립 — 사진을 왼쪽에 세로로 세우고 오른쪽 지면에 활자를 쌓는 잡지 표지. */
+function drawCoverStrip(ctx: Ctx, issue: Issue, plate: Plate | null): void {
+  fillRect(ctx, 0, 0, CARD_W, CARD_H, P.paper);
+  const stripW = 448;
+  drawBand(ctx, plate, 0, 0, stripW, CARD_H, 0.36);
+  // 사진 오른쪽 끝을 지면과 붙입니다.
+  const edge = ctx.createLinearGradient(stripW - 90, 0, stripW, 0);
+  edge.addColorStop(0, `rgba(${P.scrim},0)`);
+  edge.addColorStop(1, hexWith(P.paper, "ee"));
+  ctx.fillStyle = edge;
+  ctx.fillRect(stripW - 90, 0, 90, CARD_H);
+  fillRect(ctx, stripW - 1, 0, 2, CARD_H, P.accentText);
+
+  brandTop(ctx, P.fg);
+  categoryMark(ctx, issue, 150, alpha(P.fg, 0.6));
+  setFont(ctx, 900, 26);
+  ctx.fillStyle = photoAccent();
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  const heat = issue.temp !== null ? `논란 ${issue.temp}°` : `화제 ${issue.buzz}`;
+  ctx.fillText(heat, CARD_W - M, 150);
+  ctx.textAlign = "left";
+
+  const colX = stripW + 46;
+  const colW = CARD_W - colX - M;
+
+  const kickerFit = fitRegion(ctx, issue.kicker, {
+    w: colW,
+    h: 130,
+    max: 26,
+    min: 20,
+    weight: 700,
+    lineFactor: 1.44,
+    maxLines: 3,
+  });
+  setFont(ctx, 700, kickerFit.size);
+  ctx.fillStyle = alpha(P.fg, 0.62);
+  drawLines(ctx, kickerFit.lines, colX, 262, kickerFit.lineHeight);
+
+  const headFit = fitRegion(ctx, issue.hook, {
+    w: colW,
+    h: 640,
+    max: 74,
+    min: 44,
+    weight: 900,
+    lineFactor: 1.16,
+    maxLines: 8,
+  });
+  const headTop = 262 + kickerFit.height + 34;
+  fillRect(ctx, colX, headTop - 22, 70, 6, P.accentText);
+  drawEmphasisLines(ctx, headFit.lines, colX, headTop, headFit.size, headFit.lineHeight, {
+    color: P.fg,
+    hot: P.accentText,
+  });
+
+  const sourceY = CARD_H - 150;
+  ctx.strokeStyle = alpha(P.fg, 0.2);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(colX, sourceY - 18);
+  ctx.lineTo(CARD_W - M, sourceY - 18);
+  ctx.stroke();
+  const credit = plate?.stock ? " · 자료사진" : "";
+  setFont(ctx, 700, 24);
+  ctx.fillStyle = alpha(P.fg, 0.55);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(`${issue.source} · ${timeAgo(issue.publishedAt)}${credit}`, colX, sourceY);
+  footer(ctx, 0, "paper");
+}
+
+/** ⑤ 속보 — 붉은 톤 + 큰 활자. */
+function drawCoverBreaking(ctx: Ctx, issue: Issue, plate: Plate | null): void {
+  coverBase(ctx, plate, 0.36);
+  topScrim(ctx, 240);
+  bottomScrim(ctx, 500, 0.99);
+
+  fillRect(ctx, 0, 0, CARD_W, 12, P.accent);
+  setFont(ctx, 900, 26);
+  setTracking(ctx, 1.6);
+  const badge = "속보 · HOT";
+  const badgeW = ctx.measureText(badge).width + 40;
+  fillRect(ctx, M, 64, badgeW, 46, P.alt);
+  ctx.fillStyle = P.onAlt;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(badge, M + 20, 88);
+  setTracking(ctx, 0);
+  ctx.textBaseline = "top";
+
+  setFont(ctx, 800, 24);
+  ctx.fillStyle = ON_PHOTO_DIM;
+  ctx.fillText(brandName(), M + badgeW + 24, 76);
+  heatMark(ctx, issue, 72, ON_PHOTO);
+  categoryMark(ctx, issue, 150, ON_PHOTO_DIM);
+
+  // 속보 판은 위에서 바로 제목이 나오도록 — 사진이 넓게 보이고, 첫 줄에서 눈이 멈춥니다.
+  const kickerFit = fitRegion(ctx, issue.kicker, {
+    w: CARD_W - M * 2,
+    h: 100,
+    max: 32,
+    min: 24,
+    weight: 700,
+    lineFactor: 1.4,
+    maxLines: 2,
+  });
+  setFont(ctx, 700, kickerFit.size);
+  ctx.fillStyle = alpha(ON_PHOTO, 0.78);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  drawLines(ctx, kickerFit.lines, M, 206, kickerFit.lineHeight);
+
+  const sourceY = CARD_H - 106;
+  const headFit = fitRegion(ctx, issue.hook, {
+    w: CARD_W - M * 2,
+    h: 470,
+    max: 110,
+    min: 60,
+    weight: 900,
+    lineFactor: 1.08,
+    maxLines: 4,
+  });
+  const headY = sourceY - 78 - headFit.height;
+  photoShadow(ctx, true);
+  drawEmphasisLines(ctx, headFit.lines, M, headY, headFit.size, headFit.lineHeight, {
+    color: ON_PHOTO,
+    hot: photoAccent(),
+  });
+  photoShadow(ctx, false);
+
+  fillRect(ctx, M, sourceY - 54, 132, 8, P.accent);
+  sourceLine(ctx, issue, plate, sourceY, ON_PHOTO_FAINT);
+  swipe(ctx, "전체 팩트 →", sourceY, photoAccent());
+  footer(ctx, 0, "photo");
+}
+
+function drawCover(ctx: Ctx, issue: Issue, plate: Plate | null, layout?: CardLayout): void {
+  const picked = layout ?? layoutOf(issue);
+  if (picked === "quote") drawCoverQuote(ctx, issue, plate);
+  else if (picked === "stat") drawCoverStat(ctx, issue, plate);
+  else if (picked === "split") drawCoverStrip(ctx, issue, plate);
+  else if (picked === "breaking") drawCoverBreaking(ctx, issue, plate);
+  else drawCoverOverlay(ctx, issue, plate);
+}
+
+/* ------------------------------------------------------------------ slide 2 */
+
+/** ② 무슨 일인데 — 사진 띠 + 번호 붙은 팩트 3줄. */
+function drawFacts(ctx: Ctx, issue: Issue, plate: Plate | null): void {
+  const bandH = 604;
+  fillRect(ctx, 0, 0, CARD_W, CARD_H, P.paper);
+  drawBand(ctx, plate, 0, 0, CARD_W, bandH, 0.36);
+  topScrim(ctx, 260);
+  bottomScrim(ctx, bandH - 300, 0.94);
+  bandFade(ctx, bandH - 130, 130, P.paper);
+
+  brandTop(ctx);
+  stepLabel(ctx, "01 · 무슨 일인데", 150, ON_PHOTO_DIM);
+
+  const headFit = fitRegion(ctx, issue.hook, {
+    w: CARD_W - M * 2,
+    h: 190,
+    max: 56,
+    min: 38,
+    weight: 900,
+    lineFactor: 1.16,
+    maxLines: 2,
+  });
+  photoShadow(ctx, true);
+  drawEmphasisLines(ctx, headFit.lines, M, bandH - 96 - headFit.height, headFit.size, headFit.lineHeight, {
+    color: ON_PHOTO,
+    hot: photoAccent(),
+  });
+  photoShadow(ctx, false);
+
+  const facts = issue.facts.slice(0, 3);
+  const listTop = bandH + 36;
+  const listBottom = CARD_H - 216;
+  const rowH = (listBottom - listTop) / Math.max(1, facts.length);
+
+  facts.forEach((fact, index) => {
+    const rowTop = listTop + rowH * index;
+    setFont(ctx, 900, 26);
+    ctx.fillStyle = P.accentText;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(String(index + 1).padStart(2, "0"), M, rowTop + 8);
+
+    const textX = M + 78;
+    const maxWidth = CARD_W - textX - M;
+    const fit = fitRegion(ctx, fact, {
+      w: maxWidth,
+      h: rowH - 34,
+      max: 38,
+      min: 27,
+      weight: 700,
+      lineFactor: 1.4,
+      maxLines: 3,
+    });
+    drawEmphasisLines(ctx, fit.lines, textX, rowTop + 2, fit.size, fit.lineHeight, {
+      color: alpha(P.fg, 0.94),
+      hot: P.fg,
+      weight: 700,
+      marker: P.accent,
+      markerInk: P.onAccent,
+    });
+
+    if (index < facts.length - 1) {
+      ctx.strokeStyle = alpha(P.fg, 0.12);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(M, rowTop + rowH - 18);
+      ctx.lineTo(CARD_W - M, rowTop + rowH - 18);
+      ctx.stroke();
+    }
+  });
+
+  const original = issue.title.length > 52 ? `${issue.title.slice(0, 51)}…` : issue.title;
+  setFont(ctx, 600, 22);
+  ctx.fillStyle = alpha(P.fg, 0.44);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(`원문 · ${issue.source} · ${original}`, M, CARD_H - 196);
+
+  footer(ctx, 1, "paper");
+}
+
+/* ------------------------------------------------------------------ slide 3 */
+
+/** ③ 왜 지금 뜨나 — 사진 전체 위에 큰 인용, 아래 지면에 핵심 쟁점. */
+function drawWhy(ctx: Ctx, issue: Issue, plate: Plate | null): void {
+  fillRect(ctx, 0, 0, CARD_W, CARD_H, P.paper);
+  drawFullPlate(ctx, plate, 0.3);
+  ctx.fillStyle = "rgba(8,8,10,0.52)";
+  ctx.fillRect(0, 0, CARD_W, CARD_H);
+  topScrim(ctx, 300);
+
+  brandTop(ctx);
+  stepLabel(ctx, "02 · 왜 지금 뜨나", 150, ON_PHOTO_DIM);
+
+  // 인용 부호는 활자가 아니라 그린 막대로 — 폰트마다 모양이 달라지지 않게.
+  fillRect(ctx, M, 214, 66, 12, photoAccent());
+  fillRect(ctx, M, 240, 66, 12, photoAccent());
+
+  const body = issue.background || issue.kicker || issue.hook;
+  const bodyFit = fitRegion(ctx, body, {
+    w: CARD_W - M * 2,
+    h: 350,
+    max: 52,
+    min: 32,
+    weight: 700,
+    lineFactor: 1.5,
+    maxLines: 4,
+  });
+  setFont(ctx, 700, bodyFit.size);
+  ctx.fillStyle = ON_PHOTO;
+  photoShadow(ctx, true);
+  drawLines(ctx, bodyFit.lines, M, 312, bodyFit.lineHeight);
+  photoShadow(ctx, false);
+
+  // 아래 지면 — 색 박스가 아니라 화면 끝까지 닿는 종이 띠.
+  const paperTop = 946;
+  fillRect(ctx, 0, paperTop, CARD_W, CARD_H - paperTop, P.paper);
+  fillRect(ctx, 0, paperTop, CARD_W, 8, P.accentText);
+
+  stepLabel(ctx, "핵심 쟁점", paperTop + 40, alpha(P.accentText, 0.9));
+
+  const point = issue.point || issue.poll.question;
+  const pointFit = fitRegion(ctx, point, {
+    w: CARD_W - M * 2,
+    h: 140,
+    max: 56,
+    min: 30,
+    weight: 900,
+    lineFactor: 1.24,
+    maxLines: 2,
+  });
+  drawEmphasisLines(ctx, pointFit.lines, M, paperTop + 88, pointFit.size, pointFit.lineHeight, {
+    color: P.fg,
+    hot: P.accentText,
+  });
+
+  if (issue.sides?.labelA && issue.sides.labelB) {
+    const chipY = paperTop + 246;
+    setFont(ctx, 800, 22);
+    setTracking(ctx, 1.4);
+    ctx.fillStyle = alpha(P.fg, 0.55);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    const text = `A ${issue.sides.labelA}   ·   B ${issue.sides.labelB}`;
+    ctx.fillText(text, M, chipY);
+    setTracking(ctx, 0);
+  } else {
+    // 두 진영 문장이 없을 때는 투표 선택지를 미리 보여 줍니다 — 빈 지면 대신 다음 장으로 이어지게.
+    const chipY = paperTop + 196;
+    setFont(ctx, 800, 24);
+    ctx.fillStyle = alpha(P.fg, 0.5);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(`A ${issue.poll.a}`, M, chipY);
+    ctx.fillText(`B ${issue.poll.b}`, M, chipY + 40);
+  }
+
+  sourceLine(ctx, issue, plate, CARD_H - 104, alpha(P.fg, 0.45));
+  footer(ctx, 2, "paper");
+}
+
+/* ------------------------------------------------------------------ slide 4 */
+
+/** ④ 어디서 갈렸나 — 사진 띠 + 세로 괘선으로 가른 두 진영(색 블록 없이 활자만). */
+function drawSides(ctx: Ctx, issue: Issue, plate: Plate | null): void {
+  const bandH = 520;
+  fillRect(ctx, 0, 0, CARD_W, CARD_H, P.paper);
+  drawBand(ctx, plate, 0, 0, CARD_W, bandH, 0.34);
+  topScrim(ctx, 260);
+  bottomScrim(ctx, bandH - 260, 0.9);
+  bandFade(ctx, bandH - 110, 110, P.paper);
+
+  brandTop(ctx);
+  stepLabel(ctx, "03 · 어디서 갈렸나", 150, ON_PHOTO_DIM);
+
+  const sides = issue.sides;
+  const claimA = sides?.a || issue.poll.a;
+  const claimB = sides?.b || issue.poll.b;
+  const sameWords = (a: string, b: string): boolean => {
+    const x = a.replace(/\s+/g, "");
+    const y = b.replace(/\s+/g, "");
+    if (x.length < 10 || y.length < 10) return false;
+    return x === y || x.includes(y) || y.includes(x) || x.slice(0, 16) === y.slice(0, 16);
+  };
+  let lead = issue.point || issue.poll.question;
+  if (sameWords(lead, claimA) || sameWords(lead, claimB)) lead = issue.poll.question;
+  if (sameWords(lead, claimA) || sameWords(lead, claimB)) lead = "";
+
+  // 사진 위에 A · VS · B를 크게 — 아래 지면은 두 진영의 말만 남깁니다.
+  const markY = bandH - 168;
+  setFont(ctx, 900, 104);
+  photoShadow(ctx, true);
+  ctx.fillStyle = ON_PHOTO;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText("A", M, markY);
+  ctx.textAlign = "right";
+  ctx.fillText("B", CARD_W - M, markY);
+  setFont(ctx, 900, 34);
+  ctx.fillStyle = photoAccent();
+  ctx.textAlign = "center";
+  ctx.fillText("VS", CARD_W / 2, markY + 44);
+  photoShadow(ctx, false);
+  ctx.textAlign = "left";
+
+  const paperTop = bandH;
+  fillRect(ctx, 0, paperTop, CARD_W, CARD_H - paperTop, P.paper);
+  fillRect(ctx, 0, paperTop, CARD_W, 6, P.accentText);
+
+  if (lead) {
+    const leadFit = fitRegion(ctx, lead, {
+      w: CARD_W - M * 2,
+      h: 118,
+      max: 44,
+      min: 28,
+      weight: 700,
+      lineFactor: 1.34,
+      maxLines: 2,
+    });
+    setFont(ctx, 700, leadFit.size);
+    ctx.fillStyle = alpha(P.fg, 0.86);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    drawLines(ctx, leadFit.lines, M, paperTop + 40, leadFit.lineHeight);
+  }
+
+  const regionTop = paperTop + (lead ? 190 : 56);
+  const regionBottom = CARD_H - 268;
+  const colW = (CARD_W - M * 2 - 76) / 2;
+  const leftX = M;
+  const rightX = M + colW + 76;
+
+  ctx.strokeStyle = alpha(P.fg, 0.14);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(CARD_W / 2, regionTop);
+  ctx.lineTo(CARD_W / 2, regionBottom);
+  ctx.stroke();
+
+  const labelA = sides?.labelA || "";
+  const labelB = sides?.labelB || "";
+
+  const drawSide = (x: number, key: string, label: string, claim: string, color: string) => {
+    const claimFit = fitRegion(ctx, claim, {
+      w: colW,
+      h: regionBottom - regionTop - 76,
+      max: 52,
+      min: 27,
+      weight: 800,
+      lineFactor: 1.4,
+      maxLines: 6,
+    });
+    const blockH = 66 + claimFit.height;
+    const top = regionTop + Math.max(0, (regionBottom - regionTop - blockH) / 2);
+
+    setFont(ctx, 800, 22);
+    setTracking(ctx, 2.2);
+    ctx.fillStyle = alpha(color, 0.95);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(label ? `${key} · ${label}` : key, x, top);
+    setTracking(ctx, 0);
+
+    setFont(ctx, 800, claimFit.size);
+    ctx.fillStyle = P.fg;
+    drawLines(ctx, claimFit.lines, x, top + 66, claimFit.lineHeight);
+  };
+
+  drawSide(leftX, "A", labelA, claimA, P.accent);
+  drawSide(rightX, "B", labelB, claimB, P.alt);
+
+  // 마지막 줄 — 이 카드에서 바로 투표로 넘어가도록.
+  const ctaTop = CARD_H - 196;
+  fillRect(ctx, 0, ctaTop, CARD_W, 54, P.accent);
+  setFont(ctx, 900, 34);
+  ctx.fillStyle = P.onAccent;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText("당신은 어느 쪽?", M, ctaTop + 8);
+  setFont(ctx, 700, 23);
+  ctx.fillStyle = alpha(P.onAccent, 0.72);
+  ctx.textAlign = "right";
+  ctx.fillText("넘겨서 5장에서 투표 →", CARD_W - M, ctaTop + 15);
+  ctx.textAlign = "left";
+
+  footer(ctx, 3, "paper");
+}
+
+/* ------------------------------------------------------------------ slide 5 */
+
+/** ⑤ 당신의 선택 — 사진 위 질문, 아래 지면에 A/B와 댓글 유도. */
+function drawVote(ctx: Ctx, issue: Issue, plate: Plate | null): void {
+  const bandH = 706;
+  fillRect(ctx, 0, 0, CARD_W, CARD_H, P.paper);
+  drawBand(ctx, plate, 0, 0, CARD_W, bandH, 0.34);
+  topScrim(ctx, 260);
+  bottomScrim(ctx, bandH - 340, 0.96);
+  bandFade(ctx, bandH - 110, 110, P.paper);
+
+  brandTop(ctx);
+  stepLabel(ctx, "04 · 당신의 선택", 150, ON_PHOTO_DIM);
+
+  const question = issue.poll.question;
+  const qFit = fitRegion(ctx, question, {
+    w: CARD_W - M * 2,
+    h: 300,
+    max: 82,
+    min: 44,
+    weight: 900,
+    lineFactor: 1.12,
+    maxLines: 3,
+  });
+  photoShadow(ctx, true);
+  drawEmphasisLines(ctx, qFit.lines, M, bandH - 72 - qFit.height, qFit.size, qFit.lineHeight, {
+    color: ON_PHOTO,
+    hot: photoAccent(),
+  });
+  photoShadow(ctx, false);
+
+  fillRect(ctx, 0, bandH, CARD_W, 6, P.accentText);
+
+  const options = [
+    { key: "A", text: issue.poll.a, color: P.accent, ink: P.onAccent },
+    { key: "B", text: issue.poll.b, color: P.alt, ink: P.onAlt },
+  ];
+  const rowH = 158;
+  const areaTop = bandH + 44;
+  const areaBottom = CARD_H - 206;
+  let optionTop = areaTop + Math.max(0, (areaBottom - areaTop - rowH * 2) / 2);
+  options.forEach((option, index) => {
+    setFont(ctx, 900, 30);
+    ctx.fillStyle = option.color;
+    ctx.beginPath();
+    ctx.arc(M + 30, optionTop + 44, 30, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = option.ink;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(option.key, M + 30, optionTop + 46);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+
+    const fit = fitRegion(ctx, option.text, {
+      w: CARD_W - M * 2 - 100,
+      h: 118,
+      max: 44,
+      min: 28,
+      weight: 800,
+      lineFactor: 1.32,
+      maxLines: 2,
+    });
+    setFont(ctx, 800, fit.size);
+    ctx.fillStyle = P.fg;
+    drawLines(ctx, fit.lines, M + 82, optionTop + 44 - fit.height / 2, fit.lineHeight);
+
+    if (index === 0) {
+      ctx.strokeStyle = alpha(P.fg, 0.12);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(M, optionTop + rowH - 14);
+      ctx.lineTo(CARD_W - M, optionTop + rowH - 14);
+      ctx.stroke();
+    }
+    optionTop += rowH;
+  });
+
+  setFont(ctx, 700, 24);
+  ctx.fillStyle = alpha(P.fg, 0.5);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText("고른 이유를 한 줄로 남기면 토론이 붙어요", M, CARD_H - 186);
+
+  // 댓글 유도 — 화면 끝까지 닿는 강조 바.
+  const ctaTop = CARD_H - 150;
+  fillRect(ctx, 0, ctaTop, CARD_W, 54, P.accent);
+  setFont(ctx, 900, 34);
+  ctx.fillStyle = P.onAccent;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText("댓글로 A 아니면 B", M, ctaTop + 8);
+  setFont(ctx, 700, 23);
+  ctx.fillStyle = alpha(P.onAccent, 0.74);
+  ctx.textAlign = "right";
+  ctx.fillText("이유도 한 줄 · 저장해 두고 다시 보기", CARD_W - M, ctaTop + 15);
+  ctx.textAlign = "left";
+
+  footer(ctx, 4, "paper", "원문 링크는 프로필에");
+}
+
+/* ------------------------------------------------------------------ export */
+
+async function ensureFonts(): Promise<void> {
+  if (typeof document === "undefined" || !document.fonts) return;
+  try {
+    await Promise.all([
+      document.fonts.load(`900 96px ${SANS}`, "가나다라마바사 1234%"),
+      document.fonts.load(`800 48px ${SANS}`, "가나다라마바사 1234%"),
+      document.fonts.load(`700 40px ${SANS}`, "가나다라마바사 1234%"),
+      document.fonts.load(`600 32px ${SANS}`, "가나다라마바사 1234%"),
+    ]);
+    await document.fonts.ready;
+  } catch {
+    /* 폰트를 못 받아도 기본 글꼴로 그립니다 */
+  }
+}
+
+/** 폰트는 한 번만 받아 오면 됩니다 — 카드 5장을 그릴 때마다 기다리지 않습니다. */
+let fontsTask: Promise<void> | null = null;
+function ensureFontsOnce(): Promise<void> {
+  if (!fontsTask) fontsTask = ensureFonts();
+  return fontsTask;
 }
 
 export interface SlideAsset {
@@ -1363,11 +1490,8 @@ async function digest(blob: Blob): Promise<string> {
 
 export async function renderSlide(issue: Issue, index: number, options: RenderOptions = {}): Promise<HTMLCanvasElement> {
   await ensureFontsOnce();
-  const meta = CATEGORY_META[issue.category];
-  const img = await loadIssueImage(issue.image);
-
-  // 그리기는 전부 동기라, 여기서 테마를 정하면 이 한 장 안에서 바뀌지 않습니다.
   useOptions(options);
+  PLATES = await resolvePlates(issue);
 
   const canvas = document.createElement("canvas");
   canvas.width = CARD_W;
@@ -1377,11 +1501,11 @@ export async function renderSlide(issue: Issue, index: number, options: RenderOp
   ctx.textBaseline = "top";
   ctx.textAlign = "left";
 
-  if (index === 0) drawCover(ctx, issue, meta.color, img, options.layout);
-  else if (index === 1) drawFacts(ctx, issue, meta.color, img);
-  else if (index === 2) drawWhy(ctx, issue, meta.color, img);
-  else if (index === 3) drawSides(ctx, issue, meta.color);
-  else drawVote(ctx, issue, meta.color, img);
+  if (index === 0) drawCover(ctx, issue, plateFor(0), options.layout);
+  else if (index === 1) drawFacts(ctx, issue, plateFor(1));
+  else if (index === 2) drawWhy(ctx, issue, plateFor(2));
+  else if (index === 3) drawSides(ctx, issue, plateFor(1));
+  else drawVote(ctx, issue, plateFor(0));
 
   return canvas;
 }

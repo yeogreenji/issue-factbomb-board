@@ -23,6 +23,12 @@ export interface Issue {
   url: string;
   publishedAt: number;
   image: string;
+  /** 기사에서 확인한 사진 후보(대표 → 본문 사진 순). 카드 5장이 같은 사진만 쓰지 않게 합니다. */
+  images?: string[];
+  /** 기사에 실제로 있던 인용 한 줄 — 표지 '한마디' 판에만 씁니다. */
+  quote?: string;
+  /** 표지 편집 판(서버가 골라 카드마다 다르게 내려 줍니다). */
+  layout?: "overlay" | "quote" | "stat" | "split" | "breaking";
   hook: string;
   kicker: string;
   /** 팩트 3줄 */

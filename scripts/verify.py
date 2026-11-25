@@ -38,6 +38,8 @@ SHOTS = ROOT / "docs" / "screenshots"
 NODE_BIN = "/workspace/.tools/node-v22.12.0-linux-x64/bin"
 LIBS = "/workspace/.libs/usr/lib/x86_64-linux-gnu"
 # 프로세스/스레드 한도가 낮은 컨테이너에서는 VERIFY_SINGLE_PROCESS=1 로 크로미움을 한 프로세스로 띄웁니다.
+# 주의: 단일 프로세스 크로미움은 두 번째 브라우저 컨텍스트를 만들 때 죽습니다 — 공유 링크 검사가 있는
+# 기본 실행에서는 쓰지 마세요(스레드 여유가 있는 환경이면 그냥 기본값으로 돌리면 됩니다).
 LAUNCH_ARGS = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--in-process-gpu"]
 if os.environ.get("VERIFY_SINGLE_PROCESS") == "1":
     LAUNCH_ARGS += ["--single-process", "--no-zygote"]
@@ -458,6 +460,21 @@ def scenario_mobile(base: str, browser):
         check("A: 표지에 기사 사진이 실제로 그려짐", top["colors"] >= 26, str(top))
     else:
         check("A: 사진이 없어도 표지가 그래픽으로 채워짐", top_region_pixels(page, 1)["colors"] >= 8)
+
+    # 2~5장도 색면이 아니라 사진 위에 조판됐는지 — 카드마다 위쪽 영역을 픽셀 색으로 확인합니다.
+    photo_slides = []
+    for slide in range(2, 6):
+        page.locator(f'[data-testid="progress-{slide}"]').click()
+        settle(page, 420)
+        info = top_region_pixels(page, slide)
+        photo_slides.append((slide, info["colors"]))
+    check(
+        "A: ②~⑤ 카드에도 사진이 깔림(색면 아님)",
+        all(colors >= 12 for _, colors in photo_slides),
+        str(photo_slides),
+    )
+    page.locator('[data-testid="progress-1"]').click()
+    settle(page, 300)
 
     page.screenshot(path=str(SHOTS / "03-mobile-cover.png"))
     for i in range(1, 5):
@@ -1191,7 +1208,7 @@ def api_checks(port: int):
     issues = payload.get("issues") or []
     feeds = payload.get("feeds") or []
     check("API: /api/trending 200", status == 200 and payload.get("ok") is True)
-    check("API: RSS 19곳 모두 수집", len(feeds) == 19 and all(f.get("ok") for f in feeds), f"{sum(1 for f in feeds if f.get('ok'))}/{len(feeds)}")
+    check("API: RSS 19곳 이상 모두 수집", len(feeds) >= 19 and all(f.get("ok") for f in feeds), f"{sum(1 for f in feeds if f.get('ok'))}/{len(feeds)}")
     check(
         "API: 연예·사회·이슈 피드 포함",
         any("연예" in f.get("name", "") for f in feeds) and any("사회" in f.get("name", "") for f in feeds),
@@ -1230,6 +1247,13 @@ def api_checks(port: int):
     POLITICS = re.compile(r"대통령|대통령실|청와대|국회|여당|야당|장관|검찰|탄핵|공소|특검|선거|공천|민주당|국민의힘|계엄")
     stray = [issue["title"] for issue in issues if POLITICS.search(issue["title"])]
     check("API: 정치·정부 공격 기사가 섞이지 않음", not stray, str(stray)[:160])
+    layouts = [issue.get("layout") for issue in issues]
+    check("API: 카드마다 표지 판(레이아웃)이 3종 이상", len({l for l in layouts if l}) >= 3, str(layouts))
+    check(
+        "API: 기사 사진 후보(images)가 배열로 내려옴",
+        all(isinstance(issue.get("images"), list) for issue in issues),
+        str([len(issue.get("images") or []) for issue in issues]),
+    )
     hooks = [issue.get("hook", "") for issue in issues]
     check("API: 카드마다 헤드라인이 다름", len(set(hooks)) == len(hooks), str(hooks)[:160])
     fact_owner = {}
@@ -1382,12 +1406,23 @@ def main() -> int:
 
     port_a, port_d, port_e, port_s = 4191, 4192, 4193, 4194
     servers = []
+
+    def boot(port: int, **options) -> None:
+        """서버는 필요한 시나리오가 시작할 때만 띄웁니다 — 네 대를 동시에 올리면
+        스레드·메모리가 모자란 환경(작은 컨테이너)에서 크로미움이 죽습니다."""
+        servers.append(start_server(port, **options))
+
+    def halt() -> None:
+        """방금 띄운 서버를 내립니다."""
+        if not servers:
+            return
+        proc, log = servers.pop()
+        stop_server(proc)
+        log.close()
+
     try:
-        print("== 서버 기동 ==")
-        servers.append(start_server(port_a, dist="dist", api="on", store="redis", ai="demo", feeds="on"))
-        servers.append(start_server(port_d, dist="dist", api="on", store="memory", ai="off", feeds="on"))
-        servers.append(start_server(port_e, dist="dist-static", api="off", store="memory", ai="off", feeds="on"))
-        servers.append(start_server(port_s, dist="dist", api="on", store="memory", ai="off", feeds="on", allow_local="off"))
+        print("== 서버 기동 (A·B: 공용 집계)")
+        boot(port_a, dist="dist", api="on", store="redis", ai="demo", feeds="on")
 
         with sync_playwright() as p:
             browser = p.chromium.launch(args=LAUNCH_ARGS)
@@ -1396,11 +1431,6 @@ def main() -> int:
                 hook = scenario_mobile(f"http://127.0.0.1:{port_a}/", browser)
                 print("== B: 공용 투표·댓글 집계 ==")
                 scenario_shared(f"http://127.0.0.1:{port_a}/", browser, hook)
-            finally:
-                browser.close()
-
-            browser = p.chromium.launch(args=LAUNCH_ARGS)
-            try:
                 print("== C: 뉴스로 만들기 ==")
                 scenario_briefing(f"http://127.0.0.1:{port_a}/", browser, port_a)
                 print("== F: 데스크톱 ==")
@@ -1412,20 +1442,35 @@ def main() -> int:
             finally:
                 browser.close()
 
+            print("== 서버 기동 (D: AI 키 없음)")
+            boot(port_d, dist="dist", api="on", store="memory", ai="off", feeds="on")
             browser = p.chromium.launch(args=LAUNCH_ARGS)
             try:
                 print("== D: AI 키 없음 ==")
                 scenario_headline_only(port_d, browser)
                 poll_engine_checks(port_d)
+            finally:
+                browser.close()
+            halt()
+
+            print("== 서버 기동 (E: 정적 배포)")
+            boot(port_e, dist="dist-static", api="off", store="memory", ai="off", feeds="on")
+            browser = p.chromium.launch(args=LAUNCH_ARGS)
+            try:
                 print("== E: 정적 배포 ==")
                 scenario_static(port_e, browser)
             finally:
                 browser.close()
+            halt()
 
+        print("== 서버 기동 (C: 사설망 차단)")
+        boot(port_s, dist="dist", api="on", store="memory", ai="off", feeds="on", allow_local="off")
         print("== C: 사설망 차단(배포 설정) ==")
         scenario_ssrf(port_s)
+        halt()
 
         print("== API 단위 확인 ==")
+
         api_checks(port_a)
     finally:
         for proc, log in servers:

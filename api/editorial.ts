@@ -37,6 +37,8 @@ export interface Editorial {
   facts: string[];
   background: string;
   point: string;
+  /** 기사에 실제로 있던 인용 한 줄 — 표지 '한마디' 판의 주인공. 없으면 빈 문자열. */
+  quote: string;
   sides: EditorialSides | null;
   tags: string[];
   temp: number;
@@ -89,10 +91,35 @@ function shortHook(title: string, max = 46): string {
 /** 인용문이 있으면 그 말이 기사에서 가장 센 문장입니다(연예·사회 기사에 많음). */
 function quotedLine(sentences: string[]): string {
   for (const sentence of sentences) {
-    const match = sentence.match(/["“”'‘’]([^"“”'‘’]{8,60})["“”'‘’]/);
-    if (match) return match[1].trim();
+    const match = sentence.match(/["“”'‘’]([^"“”'‘’]{6,58})["“”'‘’]/);
+    if (!match) continue;
+    const line = match[1].trim();
+    // 보도체·안내문·조각난 명사("개과천선 서인영")는 카드의 주인공으로 쓰지 않습니다.
+    if (/(밝혔다|전했다|말했다|설명했다|것으로|예정이다|요청했다)$/.test(line)) continue;
+    if (line.length < 10 || !/\s/.test(line)) continue;
+    if (!/(다|요|죠|네|까|지|라|자|야|어|아|해|함|음|임|게|데|걸)$/.test(line) && line.length < 16) continue;
+    return line;
   }
   return "";
+}
+
+/** 보도체·절차 문장으로 시작하는 문장 — 표지 리드로 쓰면 카드가 기사 요약문처럼 읽힙니다. */
+const PROCEDURAL_OPEN =
+  /^(?:지난|이날|이번|당시|현재|오는|내년|올해|\d{1,2}일|\d{4}년|\d{1,2}월)\s*|^[가-힣]{2,10}(?:청|부|위|원|처|구청|경찰|검찰|법원|위원회)에\s*따르면/;
+
+function isProcedural(sentence: string): boolean {
+  return PROCEDURAL_OPEN.test(sentence.trim());
+}
+
+/** 보도체 문장에서 "25일 …에 따르면 이날" 같은 머리말을 덜어 냅니다 — 카드에 소식지 문장이 그대로 박히지 않게. */
+export function stripProcedural(text: string): string {
+  let out = text.trim();
+  out = out.replace(/^\d{1,2}월\s*\d{1,2}일\s+/, "");
+  out = out.replace(/^\d{1,2}일\s+/, "");
+  out = out.replace(/^[가-힣]{2,10}(?:경찰청|검찰청|법원|위원회|청|부|처|구청)(?:에|가|는)?\s*따르면\s*/, "");
+  out = out.replace(/^(?:이날|당시)\s+/, "");
+  out = out.replace(/^(?:지난달|지난|올해|내년|오는)\s+/, "");
+  return out.trim();
 }
 
 /** 조사·어미만 다른 같은 문장(“…기록했다” vs “…기록했어요”)을 같은 문장으로 봅니다. */
@@ -268,9 +295,12 @@ export function composeEditorial(input: EditorialInput): Editorial {
 
   // 리드 = 훅 아래 한 줄. 팩트로 이미 쓴 문장은 피하고, 숫자나 인용이 있는 문장을 씁니다.
   const leadPool = sentences.filter((sentence) => !facts.some((fact) => similarSentence(fact, sentence)));
+  // 보도체("25일 …에 따르면")로 시작하는 문장은 리드에서 뒤로 미룹니다.
+  const naturalLead = leadPool.filter((sentence) => !isProcedural(sentence));
   const lead =
-    leadPool.find((sentence) => NUMBER.test(sentence) && sentence.length <= 90) ??
-    leadPool.find((sentence) => STANCE.test(sentence)) ??
+    naturalLead.find((sentence) => NUMBER.test(sentence) && sentence.length <= 90) ??
+    naturalLead.find((sentence) => STANCE.test(sentence)) ??
+    naturalLead[0] ??
     leadPool[0] ??
     "";
   const quote = quotedLine(sentences);
@@ -278,7 +308,8 @@ export function composeEditorial(input: EditorialInput): Editorial {
   const leadChoices = [lead, quote, ...leadPool].filter(Boolean);
   let kicker = "";
   for (const candidate of leadChoices) {
-    const line = asSentence(candidate, 62).replace(/[.]$/, "");
+    const cleaned = isProcedural(candidate) ? stripProcedural(candidate) : candidate;
+    const line = asSentence(cleaned, 62).replace(/[.]$/, "");
     if (!line) continue;
     if (line.length < 18) continue;
     if (similarSentence(line, hook) || similarSentence(line, title)) continue;
@@ -295,8 +326,11 @@ export function composeEditorial(input: EditorialInput): Editorial {
       ? rest.slice(0, 2).map((sentence) => asSentence(sentence, 80)).join(" ")
       : asSentence(lead || title, 90);
 
-  // 쟁점 = 갈등이 드러난 문장. 없으면 A/B 질문이 그 자리를 대신합니다(빈칸보다 낫습니다).
-  const conflict = sentences.find((sentence) => CONFLICT.test(sentence) && sentence.length >= 24);
+  // 쟁점 = 갈등이 드러난 문장. 보도체("25일 …에 따르면") 문장은 쟁점이 아니므로 비워 두고,
+  // 그 자리는 카드가 A/B 질문으로 채웁니다(소식지 문장이 카드에 박히는 것보다 낫습니다).
+  const conflict = sentences.find(
+    (sentence) => CONFLICT.test(sentence) && sentence.length >= 24 && !isProcedural(sentence),
+  );
   const point = conflict ? asSentence(conflict, 72).replace(/[.]$/, "") : "";
   const sides = pickSides(sentences);
 
@@ -306,6 +340,7 @@ export function composeEditorial(input: EditorialInput): Editorial {
     facts: facts.length > 0 ? facts : [asSentence(title, 90)],
     background,
     point,
+    quote,
     sides,
     tags: pickTags(`${title} ${summary}`),
     temp: tempOf(input.buzz ?? 50),

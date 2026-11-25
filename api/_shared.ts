@@ -347,7 +347,44 @@ export interface FetchedArticle {
   description: string;
   body: string;
   image: string;
+  /** 기사 페이지에서 확인한 사진 후보(대표 → 본문). 카드 5장이 같은 사진만 쓰지 않게 합니다. */
+  images: string[];
   publishedAt: number;
+}
+
+/**
+ * 기사 페이지의 사진 후보 — og:image 하나로는 카드 5장이 같은 사진을 반복합니다.
+ * 본문 <img>까지 훑어 카드마다 다른 컷을 쓸 수 있게 합니다.
+ * (로고·아이콘·빈 이미지는 걸러 냅니다.)
+ */
+function collectImages(html: string, base: string): string[] {
+  const found: string[] = [];
+  const push = (raw: string) => {
+    const value = decodeEntities(raw).trim();
+    if (!value) return;
+    let absolute = "";
+    try {
+      absolute = new URL(value, base).toString();
+    } catch {
+      return;
+    }
+    if (!/^https?:\/\//i.test(absolute)) return;
+    if (/\.svg(\?|$)|\/logo|icon|sprite|blank|spacer|btn_|btn\.|\/common\/|reporter|profile|author|columnist/i.test(absolute)) return;
+    if (absolute.length > 1_200) return;
+    if (!found.includes(absolute)) found.push(absolute);
+  };
+
+  for (const match of html.matchAll(/<meta[^>]+(?:property|name)=["'](?:og:image(?::url)?|twitter:image)["'][^>]*>/gi)) {
+    const content = match[0].match(/content=["']([^"']+)["']/i);
+    if (content) push(content[1]);
+  }
+  for (const match of html.matchAll(/<img\b[^>]*>/gi)) {
+    const tag = match[0];
+    if (/width=["']?1["'\s]|height=["']?1["'\s]/i.test(tag)) continue;
+    const src = tag.match(/(?:data-src|data-original|data-lazy|src)=["']([^"']+)["']/i);
+    if (src) push(src[1]);
+  }
+  return found.slice(0, 5);
 }
 
 export type FetchOutcome =
@@ -407,6 +444,7 @@ export async function fetchArticle(rawUrl: string, timeoutMs = 12_000): Promise<
     /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
     /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i,
   ]);
+  const images = collectImages(raw, parsed.toString());
 
   let body = htmlToText(raw);
   if (title && body.startsWith(title)) body = body.slice(title.length).trim();
@@ -422,6 +460,7 @@ export async function fetchArticle(rawUrl: string, timeoutMs = 12_000): Promise<
       description,
       body: (body || description).slice(0, MAX_ARTICLE_CHARS),
       image: /^https?:\/\//.test(image) ? image : "",
+      images,
       publishedAt: Date.now(),
     },
   };
@@ -625,11 +664,22 @@ async function callOpenAI(route: ChatRoute, input: ModelInput, signal: AbortSign
 
 export async function callModel(route: ChatRoute, input: ModelInput): Promise<ModelOutcome> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 45_000);
+  const timeoutMs = input.timeoutMs ?? 45_000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const started = Date.now();
+  const once = () =>
+    route.provider === "gemini"
+      ? callGemini(route, input, controller.signal)
+      : callOpenAI(route, input, controller.signal);
   try {
-    return route.provider === "gemini"
-      ? await callGemini(route, input, controller.signal)
-      : await callOpenAI(route, input, controller.signal);
+    const first = await once();
+    if (first.ok) return first;
+    // 모델이 붐벼서("high demand", 429/503) 한 번 실패하는 일이 잦습니다 — 카드 품질이 통째로 떨어지므로 한 번만 다시 시도합니다.
+    const transient = /high demand|overload|temporar|try again|429|5\d\d|timeout|제한 시간/i.test(first.message || "");
+    const remaining = timeoutMs - (Date.now() - started);
+    if (!transient || remaining < 6_000) return first;
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    return await once();
   } finally {
     clearTimeout(timer);
   }

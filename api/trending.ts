@@ -59,6 +59,10 @@ const CARD_LIMIT = 8;
 export type Category = "entertainment" | "society" | "culture" | "tech" | "money" | "work";
 const CATEGORIES: Category[] = ["entertainment", "society", "culture", "tech", "money", "work"];
 
+/** 표지 편집 판 — 클라이언트(lib/layout.ts)와 같은 이름을 씁니다. */
+export type CardLayoutId = "overlay" | "quote" | "stat" | "split" | "breaking";
+const CARD_LAYOUTS: CardLayoutId[] = ["overlay", "quote", "stat", "split", "breaking"];
+
 export interface IssuePoll {
   question: string;
   a: string;
@@ -80,6 +84,12 @@ export interface Issue {
   url: string;
   publishedAt: number;
   image: string;
+  /** 기사에서 확인한 사진 후보(대표 → 본문). 카드 5장이 같은 사진만 쓰지 않게 합니다. */
+  images: string[];
+  /** 기사에 실제로 있던 인용 한 줄 — 표지 '한마디' 판의 주인공. */
+  quote: string;
+  /** 표지 편집 판 — 카드마다 다른 판으로 그리도록 서버가 골라 줍니다. */
+  layout: CardLayoutId;
   hook: string;
   kicker: string;
   /** 팩트 3줄 — 무슨 일인데 */
@@ -124,6 +134,7 @@ const FEEDS: Feed[] = [
   // 연예 — 인스타에서 가장 잘 도는 사진·소식. 카드뉴스의 앞자리를 채웁니다.
   { name: "연합뉴스 연예", slug: "yna-ent", source: "연합뉴스", url: "https://www.yna.co.kr/rss/entertainment.xml", hint: "entertainment" },
   { name: "톱스타뉴스", slug: "topstar", source: "톱스타뉴스", url: "https://www.topstarnews.net/rss/allArticle.xml", hint: "entertainment" },
+  { name: "조선일보 연예", slug: "chosun-ent", source: "조선일보", url: "https://www.chosun.com/arc/outboundfeeds/rss/category/entertainments/?outputType=xml", hint: "entertainment" },
   // 사회 — 사건·사고·생활. 정치 기사는 후보에서 걸러 냅니다.
   { name: "연합뉴스 사회", slug: "yna-society", source: "연합뉴스", url: "https://www.yna.co.kr/rss/society.xml", hint: "society" },
   { name: "SBS 사회", slug: "sbs-society", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=03", hint: "society" },
@@ -144,6 +155,10 @@ const FEEDS: Feed[] = [
   { name: "동아일보 경제", slug: "donga-economy", source: "동아일보", url: "https://rss.donga.com/economy.xml", hint: "money" },
   { name: "SBS 경제", slug: "sbs-economy", source: "SBS", url: "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=02", hint: "money" },
   { name: "매일경제", slug: "mk", source: "매일경제", url: "https://www.mk.co.kr/rss/30000001/", hint: "money" },
+  { name: "머니투데이", slug: "mt", source: "머니투데이", url: "https://rss.mt.co.kr/mt_news.xml", hint: "money" },
+  { name: "한국경제", slug: "hankyung", source: "한국경제", url: "https://www.hankyung.com/feed/all-news", hint: "work" },
+  // 노컷뉴스 — 사건·생활·직장 이야기가 고르게 섞여 인스타에서 말이 되는 소재가 많습니다(사진은 본문에서 가져옵니다).
+  { name: "노컷뉴스", slug: "nocut", source: "노컷뉴스", url: "https://rss.nocutnews.co.kr/nocutnews.xml", hint: "society" },
 ];
 
 /** 검증 하네스가 가짜 RSS를 띄울 때만 씁니다. 배포 환경에서는 비어 있어 실제 언론사 주소로 갑니다. */
@@ -160,6 +175,8 @@ interface Article {
   source: string;
   publishedAt: number;
   image: string;
+  /** 기사에서 확인한 사진 후보 — 카드 5장이 같은 사진만 쓰지 않게 합니다. */
+  images: string[];
   hint: Category;
   body?: string;
   score: number;
@@ -214,20 +231,29 @@ function tagAttr(block: string, tag: string, attr: string): string {
 
 /** description/content 안에 들어 있는 첫 <img> — 사진은 없지만 본문 HTML에 사진을 넣는 피드가 많습니다. */
 function firstImageIn(raw: string): string {
-  const match = raw.match(/<img[^>]+src=["']([^"']+)["']/i);
+  // 피드에 따라 src=""를 쓰지 않고 src=https://… 처럼 따옴표 없이 넣습니다(머니투데이).
+  const match = raw.match(/<img[^>]+src=["']?([^"'\s>]+)/i);
   if (!match) return "";
-  const src = match[1]
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/\/\//, "//");
-  return /^https?:\/\//i.test(src) ? src : "";
+  return match[1].replace(/&amp;/g, "&").replace(/&quot;/g, '"');
+}
+
+/** 피드가 준 사진 주소를 절대 주소로 — HTML 엔티티(&amp;)가 남으면 이미지 서버가 400을 냅니다. */
+function normalizeImage(value: string, base: string): string {
+  const cleaned = decodeEntities(clean(value, 1_500)).trim().replace(/&amp;/g, "&");
+  if (!cleaned) return "";
+  try {
+    const absolute = new URL(cleaned, base).toString();
+    return /^https?:\/\//i.test(absolute) ? absolute : "";
+  } catch {
+    return "";
+  }
 }
 
 /**
  * 대표 사진 주소 — 피드마다 담는 자리가 달라서 아는 자리를 모두 확인합니다.
  * 서명(auth=…)이 붙은 CDN 주소가 있어 400자에서 자르지 않습니다(자르면 사진이 깨집니다).
  */
-function imageOf(block: string, rawSummary: string): string {
+function imageOf(block: string, rawSummary: string, base: string): string {
   const candidates = [
     tagAttr(block, "media:content", "url"),
     tagAttr(block, "media:thumbnail", "url"),
@@ -237,8 +263,8 @@ function imageOf(block: string, rawSummary: string): string {
     firstImageIn(rawSummary),
   ];
   for (const value of candidates) {
-    const src = clean(value, 1_500);
-    if (/^https?:\/\//i.test(src)) return src;
+    const src = normalizeImage(value, base);
+    if (src) return src;
   }
   return "";
 }
@@ -263,7 +289,7 @@ export function parseFeed(xml: string, feed: Feed): Article[] {
         .replace(/\s*\.\.\.$/, ""),
       600,
     );
-    const image = imageOf(block, rawSummary);
+    const image = imageOf(block, rawSummary, feed.url);
     const publishedAt = parseDate(tagText(block, "pubDate") || tagText(block, "dc:date"));
 
     out.push({
@@ -272,7 +298,8 @@ export function parseFeed(xml: string, feed: Feed): Article[] {
       url,
       source: feed.source,
       publishedAt,
-      image: /^https?:\/\//i.test(image) ? image : "",
+      image,
+      images: image ? [image] : [],
       hint: feed.hint,
       score: 0,
       buzz: 0,
@@ -345,7 +372,7 @@ function classifyCategory(title: string, feedHint: Category): Category {
  * (연예·문화 기사 안에 '계엄' 같은 단어가 섞여도 그건 그대로 둡니다.)
  */
 const POLITICS_NEWS =
-  /(대통령|대통령실|청와대|국무총리|총리|장관|차관|국회|여당|야당|여야|민주당|국민의힘|개혁신당|조국혁신당|정의당|원내대표|당대표|의원|비례대표|공천|출마|사퇴|탄핵|공소|특검|검찰|법무부|국정감사|청문회|예산안|법안|개각|선거|투표소|대선|총선|지선|정부|정치권|계엄|비상계엄|시국선언|성명서|논평)/;
+  /(대통령|대통령실|청와대|국무총리|총리|장관|차관|국회|여당|야당|여야|민주당|국민의힘|국힘|개혁신당|조국혁신당|정의당|원내대표|당대표|의원|비례대표|공천|출마|사퇴|탄핵|공소|특검|검찰|법무부|국정감사|청문회|예산안|법안|개각|선거|투표소|대선|총선|지선|정부|정치권|계엄|비상계엄|시국선언|성명서|논평)/;
 
 const SHOWBIZ_PASS = /(드라마|영화|예능|배우|가수|아이돌|앨범|공연|뮤지컬|웹툰|넷플릭스|시청률|팬덤|캐릭터|작품|연출|출연)/;
 
@@ -549,6 +576,12 @@ async function enrichWithBody(items: Article[]): Promise<Article[]> {
         if (body.length > 140) item.body = body.slice(0, 1_600);
         if (!item.summary && outcome.article.description) item.summary = cleanNewsText(outcome.article.description, 600);
         if (!item.image && outcome.article.image) item.image = outcome.article.image;
+        // 카드 5장이 같은 사진만 쓰지 않도록, 기사 페이지의 대표 사진 후보를 모아 둡니다.
+        // (본문 <img>는 광고·배너·기자 사진이 섞여 카드에 엉뚱한 그림이 깔리므로 쓰지 않습니다.)
+        const gathered = [item.image, outcome.article.image].filter(
+          (src) => /^https?:\/\//i.test(src) && !/\.svg(\?|$)/i.test(src),
+        );
+        item.images = [...new Set(gathered)].slice(0, 2);
       }
     }
   };
@@ -571,23 +604,27 @@ const SYSTEM_PROMPT = `당신은 20~30대가 실제로 반응하는 뉴스를 �
 - 투표 문항은 기사 속 갈등(누가 손해인지, 무엇이 부당한지, 어디까지 받아들일지)을 정면으로 묻습니다.
 
 카드 구성(각 이슈, 인스타 5장):
-1) hook: 표지에 박히는 한 줄. 38자 이내. 인스타 피드를 넘기던 사람이 손을 멈출 만큼 — 숫자·반전·궁금증 중 최소 하나는 꼭. 낚시성 왜곡 금지.
-2) kicker: 훅 아래 한 줄 맥락. 42자 이내. 왜 지금 뜨는지 한 번에.
+1) hook: 표지에 박히는 한 줄. **34자 이내**. 인스타 피드를 넘기던 사람이 손을 멈출 만큼 — 숫자 대비·반전·손해/이득·궁금증 중 최소 하나는 꼭.
+   - 금지: 날짜("25일", "지난달")·기관명으로 시작하기, "~에 따르면", "~밝혔다/전했다/발표했다"로 끝내기, 제목을 그대로 복사하기.
+   - 좋은 예: "월급 210만원인데 190만원 저축, 200억 만든 비결", "반값이라더니 3배로…구독료 인상에 난리".
+   - 낚시성 왜곡 금지. 기사에 없는 사실은 절대 넣지 마세요.
+2) kicker: 훅 아래 한 줄 맥락. **36자 이내**. 왜 지금 뜨는지, 무엇이 문제인지 한 번에. 훅과 같은 말 반복 금지.
 3) facts: "무슨 일인데" 카드의 팩트 **정확히 3개**. 각 65자 이내. 서로 다른 내용이어야 하고, 가능하면 숫자·주체·행동이 들어가게.
 4) background: "왜 지금 뜨나" 카드의 배경 2문장, 110자 이내. 앞서 무슨 일이 있었는지·왜 갑자기 화제인지.
-5) point: "핵심 쟁점" 한 줄. 55자 이내. 무엇을 두고 갈리는지 한 문장으로.
-6) sides: 갈리는 두 진영. labelA/labelB는 각 10자 이내(예: "찬성", "회사 쪽"), a/b는 각 55자 이내 주장.
-7) poll: 이 기사에서만 통하는 A/B 양자택일. 20~30대 댓글창에서 편 갈릴 만큼 팽팽하고 직관적으로.
+5) point: "핵심 쟁점" 한 줄. 55자 이내. 무엇을 두고 갈리는지 한 문장으로. 가능하면 질문형("~해야 하나?").
+6) quote: 기사에 **따옴표로 실제 인용된 말** 하나를 그대로(따옴표 제거, 50자 이내). 없으면 빈 문자열(""). 만들어 내지 마세요.
+7) sides: 갈리는 두 진영. labelA/labelB는 각 10자 이내(예: "찬성", "회사 쪽"), a/b는 각 55자 이내 주장.
+8) poll: 이 기사에서만 통하는 A/B 양자택일. 20~30대 댓글창에서 편 갈릴 만큼 팽팽하고 직관적으로.
    - poll.question: 32자 이내. 기사 속 주제어를 넣은 도발적인 한 줄(예: "도시락 12% 인상, 그냥 넘어갈까?").
    - poll.a / poll.b: 각 22자 이내. 한쪽으로 기운 단정형 문장(예: "소비자 기만, 즉시 불매" / "원가 상승 불가피, 기업 옹호").
    - 금지: "찬성/반대", "이해된다/아니다", "어떻게 보시나요", "영향 있나요", "이미 체감 중", "아직 남 일" 처럼 어느 기사에나 붙는 말.
    - 카드마다 질문·선택지가 완전히 달라야 합니다. 다른 이슈와 같은 문장을 재사용하면 실패입니다.
-8) temp: 지금 여론이 달아오른 정도 0~100 정수(사과·철회·논란·품절은 70 이상, 단순 발표는 30~50).
-9) category: entertainment(연예) | society(사회) | culture(문화·라이프) | tech(테크·AI) | money(경제·소비) | work(직장·커리어) 중 하나.
-10) tags: 검색 키워드 3개(각 12자 이내, # 없이).
+9) temp: 지금 여론이 달아오른 정도 0~100 정수(사과·철회·논란·품절은 70 이상, 단순 발표는 30~50).
+10) category: entertainment(연예) | society(사회) | culture(문화·라이프) | tech(테크·AI) | money(경제·소비) | work(직장·커리어) 중 하나.
+11) tags: 검색 키워드 3개(각 12자 이내, # 없이).
 
 출력은 아래 스키마의 JSON 객체 하나뿐입니다. 코드블록·설명을 붙이지 마세요.
-{"issues":[{"pick":1,"category":"work","hook":"...","kicker":"...","facts":["...","...","..."],"background":"...","point":"...","sides":{"labelA":"...","labelB":"...","a":"...","b":"..."},"poll":{"question":"...","a":"...","b":"..."},"temp":68,"tags":["...","...","..."]}]}`;
+{"issues":[{"pick":1,"category":"work","hook":"...","kicker":"...","facts":["...","...","..."],"background":"...","point":"...","quote":"...","sides":{"labelA":"...","labelB":"...","a":"...","b":"..."},"poll":{"question":"...","a":"...","b":"..."},"temp":68,"tags":["...","...","..."]}]}`;
 
 function buildPrompt(items: Article[]): string {
   const lines = items.map((item, index) => {
@@ -602,8 +639,9 @@ function buildPrompt(items: Article[]): string {
   return [
     "아래는 오늘 한국 언론사 RSS에서 모은 후보 기사입니다. 인스타에 올렸을 때 저장·공유·댓글 싸움이 붙을 이슈 5~6개를 골라 카드뉴스로 만드세요.",
     "그중 최소 2개는 연예·사건·소비자 논란·직장 갑질처럼 댓글창이 갈리는 주제여야 합니다. 점잖은 발표 기사만 고르면 실패입니다.",
-    "정치·정부 공격 기사는 고르지 마세요. 연예·사회·문화·테크·경제를 가리지 않고, 카테고리가 겹치지 않게 골라 주세요(가능하면 entertainment·society·culture·tech·money·work를 하나씩). 화제성이 높은 후보를 먼저 보세요.",
-    "카드끼리 문장이 겹치면 실패입니다. 훅·리드·팩트 3줄·쟁점·A/B가 각 기사에만 있는 고유한 숫자·인물·발언으로 채워지게 쓰세요. 같은 표현을 두 카드에 복사하지 마세요.",
+    "분야를 골고루 섞으세요 — 연예, 사회, 문화·라이프(여행·맛집·건강·관계), 테크·AI, 경제·소비(물가·구독·연봉), 직장·커리어 중 최소 4개 분야가 들어가야 합니다.",
+    "정치·정부 공격 기사는 고르지 마세요. 화제성이 높은 후보를 먼저 보세요.",
+    "카드끼리 문장이 겹치면 실패입니다. 훅·리드·팩트 3줄·쟁점·인용·A/B가 각 기사에만 있는 고유한 숫자·인물·발언으로 채워지게 쓰세요. 같은 표현을 두 카드에 복사하지 마세요.",
     "pick에는 고른 후보 번호를 정확히 적으세요. 없는 번호는 쓰지 마세요.",
     "내용이 2문장도 안 되는 후보는 고르지 마세요. 팩트 3개를 채울 수 있는 기사만 고르세요.",
     "",
@@ -778,6 +816,7 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
     const pollB = cleanNewsText(pollRaw.b, 34);
     const point = cleanNewsText(card.point, 80) || draft.point || cleanNewsText(pollRaw.question, 60);
     const background = cleanNewsText(card.background, 180) || draft.background || fallbackBackground(item, facts);
+    const quote = cleanNewsText(card.quote, 90) || draft.quote;
     const category = CATEGORIES.includes(categoryRaw) ? categoryRaw : item.hint;
     // AI가 밋밋한 문항을 주거나 아예 없을 때를 대비해 이 기사 전용 문항을 항상 준비합니다.
     const ownPoll = buildPoll({
@@ -796,6 +835,9 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
       url: item.url,
       publishedAt: item.publishedAt || Date.now(),
       image: item.image,
+      images: uniqueImages(item),
+      quote,
+      layout: "overlay",
       hook,
       kicker: cleanNewsText(card.kicker, 70) || draft.kicker,
       facts,
@@ -840,6 +882,9 @@ function headlineCards(items: Article[]): Issue[] {
       url: item.url,
       publishedAt: item.publishedAt || Date.now(),
       image: item.image,
+      images: uniqueImages(item),
+      quote: editorial.quote,
+      layout: "overlay",
       hook: editorial.hook,
       kicker: editorial.kicker,
       facts: editorial.facts,
@@ -858,6 +903,39 @@ function headlineCards(items: Article[]): Issue[] {
 }
 
 /* ------------------------------------------------------------ collection */
+
+/** 기사 사진 후보 — 대표 사진이 없거나 막혀도 다음 컷으로 넘어갈 수 있게. */
+function uniqueImages(item: Article): string[] {
+  const pool = [item.image, ...(item.images ?? [])].filter(
+    (src) => /^https?:\/\//i.test(src) && !/\.svg(\?|$)/i.test(src),
+  );
+  return [...new Set(pool)].slice(0, 4);
+}
+
+function canDrawLayout(issue: Issue, layout: CardLayoutId): boolean {
+  if (layout === "stat") return /\d/.test(`${issue.hook} ${issue.kicker} ${issue.facts.join(" ")}`);
+  if (layout === "quote") return Boolean(issue.quote && issue.quote.length >= 10 && /\s/.test(issue.quote));
+  return true;
+}
+
+/**
+ * 표지 판 배분 — 카드가 옆 카드와 같은 판이 되지 않게 돌려 가면서,
+ * 그 판을 그릴 수 있는 카드(숫자가 있는 카드만 '숫자 판', 인용이 있는 카드만 '한마디' 판)에만 줍니다.
+ */
+function assignLayouts(issues: Issue[]): void {
+  const used = new Set<CardLayoutId>();
+  issues.forEach((issue, index) => {
+    if (used.size >= CARD_LAYOUTS.length) used.clear();
+    const start = index % CARD_LAYOUTS.length;
+    const order = [...CARD_LAYOUTS.slice(start), ...CARD_LAYOUTS.slice(0, start)];
+    const pick =
+      order.find((layout) => !used.has(layout) && canDrawLayout(issue, layout)) ??
+      order.find((layout) => canDrawLayout(issue, layout)) ??
+      "overlay";
+    issue.layout = pick;
+    used.add(pick);
+  });
+}
 
 async function collect(): Promise<TrendingDoc> {
   const settled = await Promise.all(
@@ -937,6 +1015,8 @@ async function loadDoc(refresh: boolean): Promise<TrendingDoc> {
     const doc = await collect();
   const sorted = [...doc.issues].sort((a, b) => b.buzz - a.buzz || (b.temp ?? 0) - (a.temp ?? 0));
   doc.issues = sorted;
+  // 화제성 순으로 줄을 세운 다음에 표지 판을 배분합니다 — 순서가 바뀌어 같은 판이 옆에 붙지 않게.
+  assignLayouts(doc.issues);
     if (doc.issues.length > 0) {
       await kvSet(CACHE_KEY, doc, CACHE_TTL_SECONDS);
       await Promise.all(
