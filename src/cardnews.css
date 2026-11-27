@@ -854,10 +854,6 @@
   color: var(--lime);
 }
 
-.cn-caption textarea {
-  min-height: 200px;
-}
-
 .cn-action.is-edit {
   position: relative;
 }
