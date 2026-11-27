@@ -4,7 +4,7 @@
 
     python3 scripts/live-caption-shot.py
 
-저장: downloads/issue-caption-desktop.png (데스크톱 1440), downloads/issue-caption-mobile.png (390)
+저장: downloads/issue-caption-v2-desktop.png (데스크톱 1440), downloads/issue-caption-v2-mobile.png (390, 캡션 패널이 화면 가운데)
 """
 import json
 import os
@@ -42,7 +42,10 @@ def open_caption(page):
     page.wait_for_selector('[data-testid="slide-img-1"]', timeout=60000)
     page.locator('[data-testid="open-caption"]').click()
     page.wait_for_selector('[data-testid="caption-text"]', timeout=15000)
-    page.wait_for_timeout(1500)
+    page.wait_for_timeout(1200)
+    # 캡션 패널이 화면 가운데 오게 — 폰 화면에서 복사 버튼과 캡션 전체가 한눈에 보입니다.
+    page.locator('[data-testid="caption-panel"]').scroll_into_view_if_needed()
+    page.wait_for_timeout(600)
     return page.locator('[data-testid="caption-text"]').input_value()
 
 
@@ -57,7 +60,7 @@ def main() -> int:
         page = ctx.new_page()
         page.goto(URL, wait_until="networkidle", timeout=90000)
         caption = open_caption(page)
-        page.screenshot(path=str(OUT / "issue-caption-desktop.png"))
+        page.screenshot(path=str(OUT / "issue-caption-v2-desktop.png"))
         report["desktop"] = {"chars": len(caption), "tags": caption.count("#")}
         report["caption_first_lines"] = caption.split("\n")[:4]
         ctx.close()
@@ -71,7 +74,7 @@ def main() -> int:
         page.wait_for_timeout(800)
         page.screenshot(path=str(OUT / "issue-daybar-mobile.png"))
         caption = open_caption(page)
-        page.screenshot(path=str(OUT / "issue-caption-mobile.png"))
+        page.screenshot(path=str(OUT / "issue-caption-v2-mobile.png"))
         report["mobile"] = {"chars": len(caption), "tags": caption.count("#")}
         ctx.close()
         browser.close()

@@ -142,10 +142,10 @@ function sideLines(issue: Issue, ai: IssueCaption, max: number): string[] {
 /** ④ 댓글 싸움을 부르는 질문 — AI가 캡션용 질문을 줬으면 그것, 없으면 기본 문장. */
 function askLines(ai: IssueCaption, max: number): string[] {
   const question = clip(ai.ask || "", max);
-  if (!question) return ["여러분은 어느 쪽이 더 문제라고 보세요?", "댓글로 의견 남겨주세요 👇"];
+  if (!question) return ["여러분은 어느 쪽이 더 문제라고 보세요?", "댓글로 의견 남겨주세요 💬"];
   // AI가 이미 댓글을 부르는 문장을 줬으면 한 줄로 끝냅니다(같은 말 반복 금지).
   if (/댓글/.test(question)) return [question];
-  return [question, "댓글로 의견 남겨주세요 👇"];
+  return [question, "댓글로 의견 남겨주세요 💬"];
 }
 
 /** 카드 링크 한 줄 — 온도를 알 수 있으면 함께 적습니다(이슈온도계의 숫자). */
@@ -161,7 +161,7 @@ export interface CaptionOptions {
 }
 
 /** 캡션 목표 분량 — 인스타 피드에서 비어 보이지도, 뉴스 전달문처럼 길지도 않은 구간.
- * (이모지(🔥🗣👇)는 브라우저에서 2글자로 세어져 화면 숫자가 실제보다 4~6자 크게 나옵니다.
+ * (이모지(🔥🗣💬)는 브라우저에서 2글자로 세어져 화면 숫자가 실제보다 4~6자 크게 나옵니다.
  *  350자 아래로 떨어지지 않게 아래쪽에 그만큼 여유를 둡니다.) */
 export const CAPTION_MIN = 358;
 export const CAPTION_MAX = 450;
