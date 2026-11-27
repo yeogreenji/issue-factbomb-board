@@ -51,9 +51,10 @@ export const PLANS: PlanDef[] = [
       "카드 1장씩 PNG 저장",
       "기본 워터마크(이슈온도계)",
       "에디토리얼 테마 1종",
+      "인스타 캡션 + 해시태그 8~10개",
       "저장함·발행 관리",
     ],
-    excludes: ["5장 ZIP 내려받기", "@내 핸들 워터마크", "매거진 테마 4종", "AI 캡션·해시태그"],
+    excludes: ["5장 ZIP 내려받기", "@내 핸들 워터마크", "매거진 테마 4종"],
     cta: "지금 쓰는 중",
   },
   {
@@ -70,7 +71,7 @@ export const PLANS: PlanDef[] = [
       "5장을 ZIP 한 번에 내려받기",
       "@내 핸들 워터마크",
       "매거진 테마 4종 전체",
-      "AI 캡션·해시태그 12~15개",
+      "인스타 캡션 + 해시태그 8~10개",
       "워터마크 없는 원본 PNG",
     ],
     cta: "Pro 무료 체험 켜기",
@@ -114,7 +115,7 @@ export const FEATURE_MATRIX: {
   { key: "batchZip", label: "5장 ZIP 내려받기", note: "폰에서 5장을 한 번에", value: { free: false, pro: true, team: true } },
   { key: "customHandle", label: "@내 핸들 워터마크", value: { free: false, pro: true, team: true } },
   { key: "allThemes", label: "매거진 테마", value: { free: "1종", pro: "4종 전체", team: "4종 + 팀 테마" } },
-  { key: "aiCaption", label: "AI 캡션·해시태그", value: { free: "기본 문장", pro: "12~15개", team: "12~15개 + 톤 3종" } },
+  { key: "aiCaption", label: "인스타 캡션", note: "요금제와 무관하게 완성형", value: { free: "완성형 350~450자", pro: "완성형 350~450자", team: "완성형 350~450자" } },
   { key: "grid", label: "인스타 3×3 피드 미리보기", value: { free: true, pro: true, team: true } },
   { key: "workflow", label: "저장함·발행 관리", value: { free: true, pro: true, team: true } },
   { key: "seats", label: "팀 멤버", value: { free: "1명", pro: "1명", team: "5명" } },
@@ -128,7 +129,7 @@ export function entitlements(plan: PlanId): Record<FeatureKey, boolean> {
     batchZip: pro,
     customHandle: pro,
     allThemes: pro,
-    aiCaption: pro,
+    aiCaption: true, // 캡션은 모든 요금제에서 완성형 — 계정 운영에 바로 쓰는 문장이라 잠그지 않습니다.
     teamSeats: plan === "team",
   };
 }

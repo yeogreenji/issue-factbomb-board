@@ -1,9 +1,9 @@
 {
   "name": "issue-factbomb-board",
   "private": true,
-  "version": "11.0.0",
+  "version": "12.0.0",
   "type": "module",
-  "description": "이슈온도계 — 실제 언론사 RSS 23곳에서 오늘의 바이럴·논란 기사를 모아, 실제 사진 위에 조판한 4:5 인스타 매거진 카드뉴스 5장(표지 판 5종)과 이슈마다 다른 A/B 투표·바로 올릴 수 있는 인스타 캡션(6단 구성·해시태그 12~15개)을 만들고, 오늘·어제·그제 카드를 날짜별로 보관하는 크리에이터용 이슈 스튜디오. /api/trending·/api/briefing·/api/poll·/api/img",
+  "description": "이슈온도계 — 실제 언론사 RSS 23곳에서 오늘의 바이럴·논란 기사를 모아, 실제 사진 위에 조판한 4:5 인스타 매거진 카드뉴스 5장(표지 판 5종)과 이슈마다 다른 A/B 투표·댓글 싸움을 부르는 인스타 캡션(후킹+맥락 2줄+양쪽 입장+댓글 질문, 350~450자·해시태그 8~10개)을 만들고, 오늘·어제·그제 카드를 날짜별로 보관하는 크리에이터용 이슈 스튜디오. /api/trending·/api/briefing·/api/poll·/api/img",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && tsc -p tsconfig.api.json && vite build",

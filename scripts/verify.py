@@ -514,31 +514,31 @@ def scenario_mobile(base: str, browser):
             (SHOTS / "15-card-export-sides.png").write_bytes(payloads[3])
             (SHOTS / "18-card-export-vote.png").write_bytes(payloads[4])
 
-    # 인스타 캡션
+    # 인스타 캡션 — 댓글 싸움을 부르는 350~450자 (팩트 3줄 나열 없음)
     page.locator('[data-testid="open-caption"]').click()
     page.wait_for_selector('[data-testid="caption-panel"]', timeout=5000)
     caption = page.locator('[data-testid="caption-text"]').input_value()
-    check("A: 캡션에 훅 포함", hook in caption)
-    check("A: 캡션 첫 줄이 카드 헤드라인", caption.splitlines()[0].strip().endswith(hook), caption.splitlines()[0][:80])
+    caption_lines = [line.strip() for line in caption.splitlines() if line.strip()]
+    check("A: 캡션 첫 줄이 후킹(카드 헤드라인)", hook in caption and caption_lines[0].startswith("🔥"), caption_lines[0][:80])
     check(
-        "A: 캡션에 무슨 일인데·팩트 3줄",
-        "무슨 일인데" in caption and caption.count("\n1.") >= 1 and caption.count("\n2.") >= 1,
+        "A: 캡션에 팩트 1·2·3 나열 없음(뉴스 전달문 탈피)",
+        "무슨 일인데" not in caption and "\n1." not in caption and "\n2." not in caption and "Q." not in caption,
         caption[:120],
     )
     check(
-        "A: 캡션에 이슈온도계 관전 포인트",
-        "이슈온도계" in caption and ("°" in caption or "화제성" in caption),
-        caption[:120],
+        "A: 캡션에 양쪽 입장이 한 줄씩",
+        sum(1 for line in caption_lines if line.startswith("🗣")) == 2,
+        " | ".join(line for line in caption_lines if line.startswith("🗣"))[:120],
     )
-    check("A: 캡션에 저장·공유 유도", "저장" in caption and "공유" in caption, caption[-160:])
-    check("A: 캡션 분량(바로 올릴 수 있는 길이)", len(caption) >= 400, f"{len(caption)}자")
-    check("A: 캡션에 해시태그", "#이슈온도계" in caption and caption.count("#") >= 5, caption[-120:])
+    check("A: 캡션에 댓글 유도 질문", "댓글" in caption, caption[-160:])
+    check("A: 캡션 분량 350~450자(황금 밸런스)", 350 <= len(caption) <= 450, f"{len(caption)}자")
+    check("A: 캡션에 해시태그 8~10개", "#이슈온도계" in caption and 8 <= hashtag_count(caption) <= 10, f"{hashtag_count(caption)}개")
     check("A: 캡션에 카드 링크", "#/i/" in caption)
     page.screenshot(path=str(SHOTS / "09-mobile-caption.png"))
     page.locator('[data-testid="copy-caption"]').click()
     settle(page, 500)
     clip = page.evaluate("navigator.clipboard.readText().catch(() => '')")
-    check("A: 캡션 복사", hook in (clip or ""), str(clip)[:60])
+    check("A: 캡션 복사", hook in (clip or "") and len(clip or "") == len(caption), str(clip)[:60])
     page.locator('[data-testid="open-caption"]').click()
 
     # 투표 · 토론
@@ -586,7 +586,7 @@ def scenario_mobile(base: str, browser):
     page.reload(wait_until="networkidle")
     page.wait_for_selector('[data-testid="viewer"]', timeout=15000)
     wait_slides(page)
-    check("A: 새로고침해도 같은 카드가 열림", hook in slide_labels(page)[0])
+    check("A: 새로고침해도 같은 카드가 열림", hook in slide_labels(page)[0], " / ".join(slide_labels(page))[:140])
     check("A: 새로고침해도 내 표 유지", page.locator('[data-testid="vote-a"]').get_attribute("aria-pressed") == "true")
     page.wait_for_selector('[data-testid="comment-list"]', timeout=8000)
     check("A: 새로고침해도 내 댓글 유지", "이건 좀 심하다" in page.locator('[data-testid="comment-list"]').inner_text())
@@ -934,7 +934,7 @@ def scenario_creator(base: str, browser):
         and page.locator(f'[data-issue-id="{saved_id}"]').first.get_attribute("data-published") == "true",
     )
 
-    # 6) 카드뉴스 — 캡션 해시태그 12~15개
+    # 6) 카드뉴스 — 캡션: 댓글 싸움 유도 350~450자 + 해시태그 8~10개
     open_viewer(page)
     wait_slides(page)
     page.locator('[data-testid="open-caption"]').click()
@@ -942,11 +942,11 @@ def scenario_creator(base: str, browser):
     settle(page, 300)
     caption = page.locator('[data-testid="caption-text"]').input_value()
     tags = hashtag_count(caption)
-    check("G: 인스타 캡션 해시태그 12~15개", 12 <= tags <= 15, f"{tags}개")
-    check("G: 캡션에 3줄 요약·토론 질문", "Q." in caption and "A." in caption and "B." in caption and caption.count("\n1.") >= 1, caption[:80])
-    check("G: 캡션에 갈리는 지점·관전 포인트", "갈리는 지점" in caption and "이슈온도계" in caption, caption[:120])
-    check("G: 캡션에 저장·공유 CTA", "저장" in caption and "공유" in caption)
-    check("G: 캡션 분량 400자 이상", len(caption) >= 400, f"{len(caption)}자")
+    check("G: 인스타 캡션 해시태그 8~10개", 8 <= tags <= 10, f"{tags}개")
+    check("G: 캡션에 양쪽 입장·댓글 유도", caption.count("🗣") == 2 and "댓글" in caption, caption[:80])
+    check("G: 캡션에 팩트 나열·보고서 말투 없음", "무슨 일인데" not in caption and "\n1." not in caption, caption[:120])
+    check("G: 캡션 분량 350~450자", 350 <= len(caption) <= 450, f"{len(caption)}자")
+    check("G: 캡션에 이슈온도계 태그", "#이슈온도계" in caption)
     page.screenshot(path=str(SHOTS / "19-creator-caption.png"))
 
     # 7) 문구 편집 — 헤드라인을 바꾸면 카드가 다시 그려지고 PNG도 바뀝니다.
@@ -1141,13 +1141,15 @@ def scenario_plans(base: str, browser):
     check("P: 잠긴 버튼에 자물쇠·Pro 표시", page.locator('[data-testid="save-all"] .pro-dot').count() == 1)
 
     page.locator('[data-testid="open-caption"]').click()
-    page.wait_for_selector('[data-testid="caption-lock"]', timeout=6000)
+    page.wait_for_selector('[data-testid="caption-text"]', timeout=6000)
     free_caption = page.locator('[data-testid="caption-text"]').input_value()
     check(
-        "P: Free 캡션은 기본본(태그 5개·3줄 요약 없음)",
-        hashtag_count(free_caption) == 5 and "Q." not in free_caption,
-        f"{hashtag_count(free_caption)}개",
+        "P: Free에서도 완성형 캡션(350~450자·태그 8~10개)",
+        350 <= len(free_caption) <= 450 and 8 <= hashtag_count(free_caption) <= 10 and "🗣" in free_caption,
+        f"{len(free_caption)}자 · {hashtag_count(free_caption)}개",
     )
+    check("P: 캡션에 잠금 안내 없음", page.locator('[data-testid="caption-lock"]').count() == 0)
+    check("P: 캡션에 댓글 유도", "댓글" in free_caption)
     page.screenshot(path=str(SHOTS / "23-caption-free.png"))
     page.locator('[data-testid="open-caption"]').click()
 
@@ -1184,8 +1186,8 @@ def scenario_plans(base: str, browser):
     settle(page, 300)
     pro_caption = page.locator('[data-testid="caption-text"]').input_value()
     tags = hashtag_count(pro_caption)
-    check("P: Pro 캡션 해시태그 12~15개", 12 <= tags <= 15, f"{tags}개")
-    check("P: Pro 캡션에 3줄 요약·A/B", "Q." in pro_caption and "A." in pro_caption and "B." in pro_caption)
+    check("P: Pro 캡션 해시태그 8~10개", 8 <= tags <= 10, f"{tags}개")
+    check("P: 캡션은 요금제와 무관하게 같은 문장", pro_caption == free_caption, f"{len(pro_caption)}자")
     page.locator('[data-testid="open-caption"]').click()
 
     # 테마 4종·@핸들 — Pro에서는 잠금이 풀립니다.
@@ -1305,7 +1307,7 @@ def scenario_days(base: str, browser, port: int):
     page.locator('[data-testid="open-caption"]').click()
     page.wait_for_selector('[data-testid="caption-text"]', timeout=6000)
     past_caption = page.locator('[data-testid="caption-text"]').input_value()
-    check("DAY: 어제 카드도 인스타 캡션 그대로", len(past_caption) >= 300 and "#이슈온도계" in past_caption, f"{len(past_caption)}자")
+    check("DAY: 어제 카드도 인스타 캡션 그대로", len(past_caption) >= 350 and "#이슈온도계" in past_caption, f"{len(past_caption)}자")
     page.locator('[data-testid="close-viewer"]').click()
     settle(page, 400)
 
@@ -1537,6 +1539,13 @@ def main() -> int:
     port_a, port_d, port_e, port_s = 4191, 4192, 4193, 4194
     servers = []
 
+    # 한 번에 다 돌리기엔 실행 시간이 긴 환경(작은 컨테이너)에서 시나리오를 나눠 돌릴 수 있게 합니다.
+    # 예: VERIFY_SCENARIOS=D,E,SSRF,API  /  비우면 전부 실행(배포 전 기본값).
+    only = {part.strip().upper() for part in os.environ.get("VERIFY_SCENARIOS", "").split(",") if part.strip()}
+
+    def want(*names: str) -> bool:
+        return not only or bool(only.intersection(names))
+
     def boot(port: int, **options) -> None:
         """서버는 필요한 시나리오가 시작할 때만 띄웁니다 — 네 대를 동시에 올리면
         스레드·메모리가 모자란 환경(작은 컨테이너)에서 크로미움이 죽습니다."""
@@ -1551,72 +1560,93 @@ def main() -> int:
         log.close()
 
     try:
-        print("== 서버 기동 (A·B: 공용 집계)")
-        boot(port_a, dist="dist", api="on", store="redis", ai="demo", feeds="on")
+        main_group = ("A", "B", "C", "F", "G", "P", "DAY")
+        if want(*main_group):
+            print("== 서버 기동 (A·B: 공용 집계)")
+            boot(port_a, dist="dist", api="on", store="redis", ai="demo", feeds="on")
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(args=LAUNCH_ARGS)
-            try:
-                print("== A: 모바일 흐름 ==")
-                hook = scenario_mobile(f"http://127.0.0.1:{port_a}/", browser)
-                print("== B: 공용 투표·댓글 집계 ==")
-                scenario_shared(f"http://127.0.0.1:{port_a}/", browser, hook)
-                print("== C: 뉴스로 만들기 ==")
-                scenario_briefing(f"http://127.0.0.1:{port_a}/", browser, port_a)
-                print("== F: 데스크톱 ==")
-                scenario_desktop(f"http://127.0.0.1:{port_a}/", browser)
-                print("== G: 크리에이터 작업대 ==")
-                scenario_creator(f"http://127.0.0.1:{port_a}/", browser)
-                print("== P: 요금제·잠금 ==")
-                scenario_plans(f"http://127.0.0.1:{port_a}/", browser)
-                print("== DAY: 날짜별 보관 ==")
-                scenario_days(f"http://127.0.0.1:{port_a}/", browser, port_a)
-            finally:
-                browser.close()
+            if want(*main_group):
+                browser = p.chromium.launch(args=LAUNCH_ARGS)
+                try:
+                    if want("A"):
+                        print("== A: 모바일 흐름 ==")
+                        hook = scenario_mobile(f"http://127.0.0.1:{port_a}/", browser)
+                    else:
+                        hook = ""
+                    if want("B"):
+                        print("== B: 공용 투표·댓글 집계 ==")
+                        scenario_shared(f"http://127.0.0.1:{port_a}/", browser, hook)
+                    if want("C"):
+                        print("== C: 뉴스로 만들기 ==")
+                        scenario_briefing(f"http://127.0.0.1:{port_a}/", browser, port_a)
+                    if want("F"):
+                        print("== F: 데스크톱 ==")
+                        scenario_desktop(f"http://127.0.0.1:{port_a}/", browser)
+                    if want("G"):
+                        print("== G: 크리에이터 작업대 ==")
+                        scenario_creator(f"http://127.0.0.1:{port_a}/", browser)
+                    if want("P"):
+                        print("== P: 요금제·잠금 ==")
+                        scenario_plans(f"http://127.0.0.1:{port_a}/", browser)
+                    if want("DAY"):
+                        print("== DAY: 날짜별 보관 ==")
+                        scenario_days(f"http://127.0.0.1:{port_a}/", browser, port_a)
+                finally:
+                    browser.close()
+                # port_a 서버는 API 단위 확인까지 쓰니 여기서 내리지 않습니다.
 
-            print("== 서버 기동 (D: AI 키 없음)")
-            boot(port_d, dist="dist", api="on", store="memory", ai="off", feeds="on")
-            browser = p.chromium.launch(args=LAUNCH_ARGS)
-            try:
-                print("== D: AI 키 없음 ==")
-                scenario_headline_only(port_d, browser)
-                poll_engine_checks(port_d)
-            finally:
-                browser.close()
+            if want("D"):
+                print("== 서버 기동 (D: AI 키 없음)")
+                boot(port_d, dist="dist", api="on", store="memory", ai="off", feeds="on")
+                browser = p.chromium.launch(args=LAUNCH_ARGS)
+                try:
+                    print("== D: AI 키 없음 ==")
+                    scenario_headline_only(port_d, browser)
+                    poll_engine_checks(port_d)
+                finally:
+                    browser.close()
+                halt()
+
+            if want("E"):
+                print("== 서버 기동 (E: 정적 배포)")
+                boot(port_e, dist="dist-static", api="off", store="memory", ai="off", feeds="on")
+                browser = p.chromium.launch(args=LAUNCH_ARGS)
+                try:
+                    print("== E: 정적 배포 ==")
+                    scenario_static(port_e, browser)
+                finally:
+                    browser.close()
+                halt()
+
+        if want("SSRF"):
+            print("== 서버 기동 (C: 사설망 차단)")
+            boot(port_s, dist="dist", api="on", store="memory", ai="off", feeds="on", allow_local="off")
+            print("== C: 사설망 차단(배포 설정) ==")
+            scenario_ssrf(port_s)
             halt()
 
-            print("== 서버 기동 (E: 정적 배포)")
-            boot(port_e, dist="dist-static", api="off", store="memory", ai="off", feeds="on")
-            browser = p.chromium.launch(args=LAUNCH_ARGS)
-            try:
-                print("== E: 정적 배포 ==")
-                scenario_static(port_e, browser)
-            finally:
-                browser.close()
-            halt()
-
-        print("== 서버 기동 (C: 사설망 차단)")
-        boot(port_s, dist="dist", api="on", store="memory", ai="off", feeds="on", allow_local="off")
-        print("== C: 사설망 차단(배포 설정) ==")
-        scenario_ssrf(port_s)
-        halt()
-
-        print("== API 단위 확인 ==")
-
-        api_checks(port_a)
+        if want("API"):
+            print("== API 단위 확인 ==")
+            if not want(*main_group):
+                # API 확인만 돌릴 때도 서버가 필요합니다.
+                boot(port_a, dist="dist", api="on", store="redis", ai="demo", feeds="on")
+            api_checks(port_a)
     finally:
         for proc, log in servers:
             stop_server(proc)
             log.close()
 
-    for old in SHOTS.glob("*.png"):
-        # 이 실행에서 다시 만들지 않은 스크린샷만 지웁니다. 실제 라이브 화면(26·27-live-*)은
-        # 배포 뒤 따로 찍는 자료라 이 하네스가 지우면 안 됩니다.
-        if "live" in old.name:
-            continue
-        if re.match(r"^\d", old.name) and old.stat().st_mtime < started_at - 1:
-            old.unlink()
-
+    # 시나리오를 나눠 돌렸을 때는 이 실행에서 안 만든 스크린샷을 지우지 않습니다.
+    if not only:
+        for old in SHOTS.glob("*.png"):
+            # 이 실행에서 다시 만들지 않은 스크린샷만 지웁니다. 실제 라이브 화면(26·27-live-*)은
+            # 배포 뒤 따로 찍는 자료라 이 하네스가 지우면 안 됩니다.
+            if "live" in old.name:
+                continue
+            if re.match(r"^\d", old.name) and old.stat().st_mtime < started_at - 1:
+                old.unlink()
+    
     unique_errors = sorted({f"{tag} {text}" for tag, text in console_errors})
     check("콘솔 에러·경고 0", len(unique_errors) == 0, " | ".join(unique_errors[:4]))
 

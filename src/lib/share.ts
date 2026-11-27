@@ -1,35 +1,43 @@
 /** 카드 공유 — PNG 저장 · 인스타 캡션 복사 · 링크 공유. 서버에 아무것도 저장하지 않습니다. */
 
-import { CATEGORY_META, type Issue } from "../types";
-import { tempLabel } from "./format";
+import type { Issue, IssueCaption } from "../types";
 
 export function issueLink(issue: Issue): string {
   const base = `${location.origin}${location.pathname}`;
   return `${base}#/i/${issue.id}`;
 }
 
-/** 서비스·카테고리 기본 태그 — 캡션 아래 12~15개를 채우는 뼈대. */
-const BASE_TAGS = ["이슈온도계", "카드뉴스", "오늘의뉴스", "뉴스요약", "이슈", "인스타카드뉴스"];
-const CATEGORY_TAGS: Record<Issue["category"], string[]> = {
-  entertainment: ["연예뉴스", "스타", "연예가화제", "방송가"],
-  society: ["사회뉴스", "사건사고", "세상돌아가는일", "공감"],
-  culture: ["문화", "라이프", "요즘뜨는것", "일상"],
-  tech: ["AI", "테크", "IT뉴스", "기술"],
-  money: ["물가", "소비", "경제뉴스", "생활경제"],
-  work: ["직장인공감", "커리어", "회사생활", "직장인"],
-};
-/** 태그가 모자랄 때 채우는 범용 태그 — 12개 아래로 떨어지지 않게. */
-const FILLER_TAGS = ["핫이슈", "실시간이슈", "오늘의이슈", "뉴스스타그램", "정보공유", "토론", "여론", "데일리뉴스"];
+/* ------------------------------------------------------------------ 태그 */
 
-/** 카테고리마다 반응이 붙는 이유가 다릅니다 — 관전 포인트 한 줄에 섞어 씁니다. */
-const CATEGORY_ANGLE: Record<Issue["category"], string> = {
-  entertainment: "연예 이슈는 첫 장 사진에서 판가름 나요.",
-  society: "사회 이슈는 '내 얘기'로 읽혀야 댓글이 붙어요.",
-  culture: "문화·라이프 이슈는 저장이 먼저 붙는 편이에요.",
-  tech: "테크 이슈는 숫자 하나로 승부가 갈려요.",
-  money: "내 지갑 얘기라 반응이 유난히 빨라요.",
-  work: "직장 이슈는 댓글창이 카드보다 뜨거워요.",
+/** 서비스 태그 — 캡션 맨 뒤에 늘 붙는 두 개. */
+const SERVICE_TAGS = ["이슈온도계", "카드뉴스"];
+
+/** 분야 태그 — 기사만으로는 모자랄 때 계정의 결을 잡아 주는 말. */
+const CATEGORY_TAGS: Record<Issue["category"], string[]> = {
+  entertainment: ["연예뉴스", "스타", "방송가"],
+  society: ["사회뉴스", "사건사고", "공감"],
+  culture: ["문화", "라이프", "요즘뜨는것"],
+  tech: ["AI", "테크", "IT뉴스"],
+  money: ["물가", "경제뉴스", "생활경제"],
+  work: ["직장인공감", "커리어", "회사생활"],
 };
+
+/** 태그가 8개 아래로 떨어질 때만 보태는 범용 태그. */
+const FILLER_TAGS = ["핫이슈", "실시간이슈", "뉴스스타그램", "토론"];
+
+/** 제목에서 뽑은 낱말이 태그로 어색해지는 꼬리 — 서술어·부사는 태그로 쓰지 않습니다. */
+const TAG_STOP = new Set([
+  "오늘", "어제", "내일", "이번", "지난", "지난달", "지난해", "올해", "관련", "대한", "위한", "통해",
+  "라며", "라고", "한다", "했다", "된다", "됐다", "이다", "있다", "없다", "같다", "보다", "만에",
+  "동안", "경우", "사실", "현재", "당시", "이후", "이전", "예정", "가능", "문제", "상황", "내용",
+  "정도", "이상", "이하", "최초", "최고", "최저", "역대", "모두", "다시", "여전히", "아직", "벌써",
+  "결국", "무더기", "단독", "속보", "종합", "포토", "영상", "인터뷰", "발표", "공개", "확인",
+  "논란", "충격", "경악", "난리", "화제", "직접", "관련", "서로", "결국",
+]);
+
+/** 태그로 쓰기 어색한 꼬리(서술어) — 낱말 자체가 문장 조각인 경우를 걸러 냅니다. */
+const TAG_TAIL =
+  /(하다|한다|했다|된다|됐다|이다|있다|없다|같다|보다|위해|대해|통해|라며|라고|지만|면서|으로|에서|부터|까지|자마자|는데|려고|하려|한|난|된|될)$/;
 
 function tidyTag(raw: string): string {
   return raw
@@ -38,180 +46,222 @@ function tidyTag(raw: string): string {
     .trim();
 }
 
-/** 제목에서 해시태그로 쓸 만한 낱말만 뽑습니다(조사·숫자만 있는 말은 버립니다). */
+/** 제목에서 해시태그로 쓸 만한 낱말만 뽑습니다(조사·서술어·숫자는 버립니다). */
 function titleKeywords(title: string): string[] {
   return title
+    .replace(/[“”"'‘’]/g, " ")
     .split(/[^가-힣A-Za-z0-9]+/)
-    .map((word) => word.replace(/(은|는|이|가|을|를|의|에|와|과|도|로|으로|만|보다|까지|에서)$/, ""))
-    .filter((word) => word.length >= 2 && word.length <= 12 && !/^\d+$/.test(word));
+    .map((word) => word.replace(/(은|는|이|가|을|를|의|에|와|과|도|로|으로|만|보다|까지|에서|에게|부터|께서)$/, ""))
+    .filter((word) => word.length >= 2 && word.length <= 8 && !/^\d/.test(word))
+    .filter((word) => !TAG_STOP.has(word) && !TAG_TAIL.test(word))
+    .slice(0, 3);
 }
 
+export const TAG_MIN = 8;
+export const TAG_MAX = 10;
+
 /**
- * 인스타에 그대로 붙일 해시태그 12~15개.
- * 이 기사에만 통하는 키워드(AI가 고른 tags) → 카테고리 → 서비스 순으로 채우고,
- * 그래도 모자랄 때만 제목 낱말과 범용 태그를 보탭니다(제목 조각이 태그로 새는 걸 막습니다).
+ * 인스타에 그대로 붙일 해시태그 8~10개.
+ *
+ * 이 기사에만 통하는 키워드(AI가 고른 tags → 제목 낱말) → 분야 → 서비스 순으로 채웁니다.
+ * 서비스 태그 두 자리는 늘 비워 두고, 8개가 안 될 때만 범용 태그로 보탭니다.
  */
 export function hashtagList(issue: Issue): string[] {
-  const primary = [...issue.tags, ...(CATEGORY_TAGS[issue.category] ?? []), ...BASE_TAGS];
-  const extra = [...titleKeywords(issue.title).slice(0, 2), ...FILLER_TAGS];
+  const keywordSlots = TAG_MAX - SERVICE_TAGS.length;
   const seen = new Set<string>();
   const out: string[] = [];
-  const push = (tag: string) => {
-    if (out.length >= 15) return;
+  const push = (tag: string, limit = keywordSlots) => {
+    if (out.length >= limit) return;
     const clean = tidyTag(tag);
-    if (clean.length < 2 || clean.length > 20) return;
+    if (clean.length < 2 || clean.length > 16) return;
     const key = clean.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
     out.push(clean);
   };
-  primary.forEach(push);
-  // 태그가 12개 아래로 떨어질 때만 제목·범용 태그로 채웁니다.
-  if (out.length < 12) extra.forEach(push);
-  else {
-    for (const tag of FILLER_TAGS) {
-      if (out.length >= 15) break;
-      push(tag);
-    }
-  }
-  return out.slice(0, 15);
+
+  [...issue.tags, ...titleKeywords(issue.title)].forEach((tag) => push(tag));
+  (CATEGORY_TAGS[issue.category] ?? []).forEach((tag) => push(tag));
+  // 8개를 채우려면 범용 태그로 조금 보탭니다(서비스 태그 2개는 남겨 둡니다).
+  if (out.length < TAG_MIN - SERVICE_TAGS.length) FILLER_TAGS.forEach((tag) => push(tag));
+  SERVICE_TAGS.forEach((tag) => push(tag, TAG_MAX));
+
+  return out.slice(0, TAG_MAX);
 }
 
-/** 한 줄 요약을 캡션 길이에 맞게 다듬습니다. */
+/* ---------------------------------------------------------------- 캡션 */
+
+/** 한 줄 길이에 맞춰 자릅니다. */
 function clip(text: string, max: number): string {
   const value = (text ?? "").replace(/\s+/g, " ").trim();
   return value.length > max ? `${value.slice(0, max - 1).trim()}…` : value;
 }
 
-/** 문장이 마침표 없이 끝나면 캡션에서는 마침표를 붙여 호흡을 맞춥니다. */
-function sentence(text: string, max: number): string {
-  const value = clip(text, max);
-  if (!value) return "";
-  return /[.!?…]$/.test(value) ? value : `${value}.`;
+/** 긴 글을 문장 단위로 끊습니다(문장 안에서 억지로 줄을 바꾸면 토막 말이 남습니다). */
+function sentences(text: string): string[] {
+  return clip(text, 300)
+    .split(/(?<=[.!?…])\s+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 /**
- * 🌡️ 관전 포인트 — 온도계 수치와 여론 결을 짚는 에디터 한 줄.
- * AI가 캡션용 문장을 줬으면 그것을 쓰고, 없으면 수치에서 만들어 냅니다(없는 수치는 만들지 않습니다).
+ * ② 핵심 맥락 두 줄 — 카드 5장에 팩트가 이미 있으니 캡션에서는 '왜 지금 논란인지'만.
+ * AI가 캡션용 문장(lead)을 줬으면 그것을, 없으면 킥커·배경에서 두 문장을 만듭니다.
+ * (분량이 모자라는 카드에서만 세 번째 문장까지 보탭니다 — limit을 늘려 호출.)
  */
-function viewpoint(issue: Issue): string {
-  const ai = clip(issue.caption?.view ?? "", 90);
-  if (ai) return sentence(ai, 90);
+function contextLines(issue: Issue, aiLead: string, max: number, limit = 2): string[] {
+  const pool = [
+    ...sentences(aiLead),
+    issue.kicker || "",
+    ...sentences(issue.background || ""),
+    issue.point || "",
+  ];
+  const out: string[] = [];
+  for (const line of pool) {
+    if (out.length >= limit) break;
+    const value = clip(line, max);
+    if (value.length < 12) continue;
+    // 같은 말을 두 줄로 되풀이하지 않습니다.
+    if (out.some((kept) => kept.slice(0, 18) === value.slice(0, 18))) continue;
+    out.push(value);
+  }
+  return out.slice(0, limit);
+}
 
+/** 양쪽 입장 — A 진영과 B 진영을 한 줄씩 마주 세웁니다. */
+function sideLines(issue: Issue, ai: IssueCaption, max: number): string[] {
+  const labelA = clip(issue.sides?.labelA || "A", 10);
+  const labelB = clip(issue.sides?.labelB || "B", 10);
+  const a = clip(ai.sideA || issue.sides?.a || issue.poll.a || "", max);
+  const b = clip(ai.sideB || issue.sides?.b || issue.poll.b || "", max);
+  if (!a || !b) return [];
+  return [`🗣 ${labelA}: ${a}`, `🗣 ${labelB}: ${b}`];
+}
+
+/** ④ 댓글 싸움을 부르는 질문 — AI가 캡션용 질문을 줬으면 그것, 없으면 기본 문장. */
+function askLines(ai: IssueCaption, max: number): string[] {
+  const question = clip(ai.ask || "", max);
+  if (!question) return ["여러분은 어느 쪽이 더 문제라고 보세요?", "댓글로 의견 남겨주세요 👇"];
+  // AI가 이미 댓글을 부르는 문장을 줬으면 한 줄로 끝냅니다(같은 말 반복 금지).
+  if (/댓글/.test(question)) return [question];
+  return [question, "댓글로 의견 남겨주세요 👇"];
+}
+
+/** 카드 링크 한 줄 — 온도를 알 수 있으면 함께 적습니다(이슈온도계의 숫자). */
+function linkLine(issue: Issue): string {
   const temp = issue.temp;
-  if (temp !== null) {
-    if (temp >= 85) return "끓는점 직전이에요. 댓글창이 카드보다 뜨거울 수 있어요.";
-    if (temp >= 70) return "오늘 논란 상위권이에요. 아직 정리된 입장이 없어서 지금이 타이밍이에요.";
-    if (temp >= 55) return "관심은 붙었는데 여론은 아직 반반이에요. 한 표가 눈에 보이는 구간이에요.";
-    if (temp >= 40) return "미지근하게 오르는 중이에요. 먼저 정리해 올리면 이 이슈의 첫 카드가 됩니다.";
-    return "아직 조용해요. 대신 지금 올리면 남들보다 하루 빠른 카드예요.";
-  }
-  if (issue.buzz !== undefined && issue.buzz > 0) {
-    return `아직 기사 수가 적어 온도는 못 쟀어요(화제성 ${issue.buzz}점). 대신 먼저 올리면 선점이에요.`;
-  }
-  return CATEGORY_ANGLE[issue.category];
+  if (temp === null || temp === undefined) return `👉 카드 5장 전체 보기 ${issueLink(issue)}`;
+  return `🌡️ 이슈온도 ${temp}° · 카드 5장 전체 보기 ${issueLink(issue)}`;
 }
 
 export interface CaptionOptions {
   /** 카드에 박은 크리에이터 핸들(@my_channel) — 캡션 끝에 함께 남깁니다. */
   handle?: string;
-  /** Pro면 3줄 요약·A/B·해시태그 12~15개를 채운 긴 캡션, Free면 짧은 기본 캡션. */
-  pro?: boolean;
 }
 
-/** Free 캡션에 붙는 기본 태그 — 5개. 나머지 해시태그 묶음은 Pro입니다. */
-export const FREE_CAPTION_TAGS = ["이슈온도계", "카드뉴스", "오늘의뉴스", "뉴스요약", "이슈"];
+/** 캡션 목표 분량 — 인스타 피드에서 비어 보이지도, 뉴스 전달문처럼 길지도 않은 구간.
+ * (이모지(🔥🗣👇)는 브라우저에서 2글자로 세어져 화면 숫자가 실제보다 4~6자 크게 나옵니다.
+ *  350자 아래로 떨어지지 않게 아래쪽에 그만큼 여유를 둡니다.) */
+export const CAPTION_MIN = 358;
+export const CAPTION_MAX = 450;
 
 /**
- * 인스타그램에 그대로 붙여 넣는 캡션.
+ * 인스타그램에 그대로 붙여 넣는 캡션 — 댓글 싸움을 부르는 350~450자.
  *
- *  ① 후킹 1~2줄(훅 + 킥커) — 더보기 전에 보이는 구간
- *  ② 📌 무슨 일인데 — 팩트 3줄 / 🗞️ 왜 지금 떴나 — 배경
- *  ③ 🧐 갈리는 지점 — 두 진영 (없으면 핵심 쟁점)
- *  ④ 🌡️ 이슈온도계 — 온도·여론 결을 짚는 에디터 한 줄
- *  ⑤ 💬 Q/A/B + 댓글·저장·공유 CTA
- *  ⑥ 카드 링크 · @핸들 · 맞춤 해시태그 12~15개
+ *  ① 후킹 첫 줄 — 카드 표지의 헤드라인(이미 34자 안쪽으로 세게 쓴 문장)
+ *  ② 핵심 맥락 두 줄 — 왜 지금 이게 논란인지, 구어체로 두 줄만
+ *  ③ 양쪽 입장 — A 진영 vs B 진영을 한 줄씩 부딪히게
+ *  ④ 댓글 싸움 질문 — 어느 쪽이 더 문제인지 묻고 댓글을 부릅니다
+ *  ⑤ 카드 링크(+ @핸들)
+ *  ⑥ 이슈 키워드 중심 해시태그 8~10개
  *
- * 크리에이터가 카드 문구를 고쳤다면 고친 문구(edited issue)를 그대로 받아 씁니다.
- * AI가 캡션용 문장(caption.hook/lead/view/ask)을 줬으면 도입·맥락·관전 포인트·질문에 먼저 씁니다.
+ * 팩트 3줄·Q/A/B는 카드 5장이 이미 들고 있으므로 캡션에서 되풀이하지 않습니다.
+ * AI가 캡션용 문장(caption.lead/sideA/sideB/ask)을 줬으면 그것을 먼저 씁니다.
  */
 export function captionFor(issue: Issue, options: CaptionOptions = {}): string {
-  const meta = CATEGORY_META[issue.category];
   const ai = issue.caption ?? {};
-  const lines: string[] = [];
+  const hookText = issue.hook || ai.hook || issue.title;
+  const tags = hashtagList(issue);
+  let hookMax = 46;
+  let contextMax = 72;
+  let sideMax = 56;
+  let contextCount = 2;
+  let tagCount = tags.length;
+  /** 분량이 모자라는 카드에서만 카드의 투표 질문·저장 한 줄을 보탭니다. */
+  let extraPoll = false;
+  let saveCta = false;
 
-  // 첫 줄은 카드 표지의 헤드라인 그대로 — 카드와 캡션이 같은 말로 시작해야 넘겨 볼 이유가 생깁니다.
-  const hook = clip(issue.hook, 110);
-  // 카드 표지의 헤드라인을 첫 줄에 그대로 두고, 그 아래 한 줄은 AI가 다듬은 문장 → 킥커 순으로 씁니다.
-  const second = clip(ai.hook || issue.kicker, 80);
+  /** 서비스 태그(#이슈온도계·#카드뉴스)는 줄여도 항상 남깁니다 — 계정 검색으로 들어오는 두 자리. */
+  const tagLine = (): string => {
+    const service = tags.length > 2 ? tags.slice(-2) : [];
+    const keywords = tags.slice(0, tags.length - service.length);
+    const keepKeywords = Math.max(0, Math.min(keywords.length, tagCount - service.length));
+    return [...keywords.slice(0, keepKeywords), ...service].map((tag) => `#${tag}`).join(" ");
+  };
 
-  if (options.pro === false) {
-    // Free — 후킹 2줄·맥락 한 줄·링크·기본 태그 5개까지만.
-    lines.push(`🔥 ${hook}`);
-    if (second) lines.push(second);
-    lines.push("");
-    const lead = sentence(ai.lead || issue.background || issue.facts[0] || "", 130);
-    if (lead) {
-      lines.push(lead);
-      lines.push("");
-    }
-    lines.push(`${meta.label} · ${issue.source} · 이슈온도계`);
-    lines.push("");
-    lines.push(`카드 5장·투표 → ${issueLink(issue)}`);
-    lines.push("");
-    lines.push(FREE_CAPTION_TAGS.map((tag) => `#${tag}`).join(" "));
-    return tidy(lines);
+  const build = (): string => {
+    const parts: string[] = [];
+    parts.push(`🔥 ${clip(hookText, hookMax)}`);
+
+    const context = contextLines(issue, ai.lead ?? "", contextMax, contextCount);
+    if (context.length > 0) parts.push("", ...context);
+
+    const sides = sideLines(issue, ai, sideMax);
+    if (sides.length > 0) parts.push("", ...sides);
+
+    if (extraPoll && issue.poll?.question) parts.push("", `📊 ${clip(issue.poll.question, 50)}`);
+
+    parts.push("", ...askLines(ai, 46));
+    if (saveCta) parts.push("🔖 지금 저장해 두면 저녁에 다시 보기 좋아요.");
+    parts.push("", linkLine(issue));
+    if (options.handle) parts.push(options.handle);
+    parts.push("", tagLine());
+
+    return tidy(parts);
+  };
+
+  let text = build();
+  // 길면 두 진영 문장 → 맥락 → 태그 순으로 조금씩 다듬습니다(태그는 8개 밑으로 줄이지 않음).
+  while (text.length > CAPTION_MAX && sideMax > 40) {
+    sideMax -= 4;
+    text = build();
+  }
+  while (text.length > CAPTION_MAX && contextMax > 48) {
+    contextMax -= 6;
+    text = build();
+  }
+  while (text.length > CAPTION_MAX && tagCount > TAG_MIN) {
+    tagCount -= 1;
+    text = build();
+  }
+  while (text.length > CAPTION_MAX && hookMax > 34) {
+    hookMax -= 4;
+    text = build();
+  }
+  // 짧으면 태그를 10개까지 채우고, 그래도 짧으면 맥락을 세 문장까지 보탭니다.
+  while (text.length < CAPTION_MIN && tagCount < TAG_MAX) {
+    tagCount += 1;
+    text = build();
+  }
+  while (text.length < CAPTION_MIN && contextCount < 3) {
+    contextCount += 1;
+    text = build();
+  }
+  while (text.length < CAPTION_MIN && contextMax < 90) {
+    contextMax += 6;
+    text = build();
+  }
+  while (text.length < CAPTION_MIN && !extraPoll) {
+    extraPoll = true;
+    text = build();
+  }
+  while (text.length < CAPTION_MIN && !saveCta) {
+    saveCta = true;
+    text = build();
   }
 
-  lines.push(`🔥 ${hook}`);
-  if (second) lines.push(second);
-
-  const facts = issue.facts.map((fact) => sentence(fact, 110)).filter(Boolean).slice(0, 3);
-  if (facts.length > 0) {
-    lines.push("");
-    lines.push("📌 무슨 일인데");
-    facts.forEach((fact, index) => lines.push(`${index + 1}. ${fact}`));
-  }
-
-  const background = sentence(ai.lead || issue.background, 150);
-  if (background) {
-    lines.push("");
-    lines.push("🗞️ 왜 지금 떴나");
-    lines.push(background);
-  }
-
-  if (issue.sides?.a && issue.sides?.b) {
-    lines.push("");
-    lines.push("🧐 갈리는 지점");
-    lines.push(`· ${clip(issue.sides.labelA || "A", 14)} 쪽 — ${sentence(issue.sides.a, 90)}`);
-    lines.push(`· ${clip(issue.sides.labelB || "B", 14)} 쪽 — ${sentence(issue.sides.b, 90)}`);
-  } else if (issue.point) {
-    lines.push("");
-    lines.push("🧐 갈리는 지점");
-    lines.push(`· ${sentence(issue.point, 100)}`);
-  }
-
-  const tempLine = issue.temp !== null ? `🌡️ 이슈온도계 ${issue.temp}° ${tempLabel(issue.temp)}` : "🌡️ 이슈온도계";
-  lines.push("");
-  lines.push(`${tempLine} — ${viewpoint(issue)}`);
-  lines.push(`(${meta.label} · ${issue.source})`);
-
-  lines.push("");
-  lines.push(`💬 Q. ${clip(issue.poll.question, 60)}`);
-  lines.push(`A. ${clip(issue.poll.a, 40)}`);
-  lines.push(`B. ${clip(issue.poll.b, 40)}`);
-
-  lines.push("");
-  lines.push(ai.ask ? sentence(ai.ask, 90) : "여러분 선택은? 댓글로 A 아니면 B, 이유도 한 줄 부탁해요.");
-  lines.push("🔖 저장해 두면 오늘 저녁 뉴스 볼 때 다시 꺼내 보기 좋아요.");
-  lines.push("📤 친구 생각도 궁금하면 공유해 주세요.");
-  lines.push("");
-  lines.push(`📎 카드 5장·투표 → ${issueLink(issue)}`);
-  if (options.handle) lines.push(options.handle);
-  lines.push("");
-  lines.push(hashtagList(issue).map((tag) => `#${tag}`).join(" "));
-
-  return tidy(lines);
+  return text;
 }
 
 /** 빈 줄 3개 이상은 2개로, 앞뒤 공백은 지우고, 인스타 한도(2,200자)로 자릅니다. */

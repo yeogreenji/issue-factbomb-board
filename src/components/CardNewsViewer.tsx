@@ -163,7 +163,9 @@ export function CardNewsViewer({
     }
   };
 
-  const autoCaption = captionFor(issue, { handle: brand.handle, pro: can.aiCaption });  const caption = captions[issue.id] ?? autoCaption;
+  /** 캡션은 요금제와 상관없이 완성형(350~450자·해시태그 8~10개)으로 바로 나갑니다 — 계정 운영에 그대로 쓰는 문장. */
+  const autoCaption = captionFor(issue, { handle: brand.handle });
+  const caption = captions[issue.id] ?? autoCaption;
   const captionEdited = captions[issue.id] !== undefined;
   const ready = slides[index] !== null;
 
@@ -347,16 +349,13 @@ export function CardNewsViewer({
                     </button>
                   </div>
                 </div>
-                {!can.aiCaption && (
-                  <div className="caption-lock" data-testid="caption-lock">
-                    <Lock size={13} />
+                {!issue.ai && (
+                  <div className="caption-lock" data-testid="caption-fallback">
+                    <Sparkles size={13} />
                     <span>
-                      지금은 <b>기본 캡션</b>(훅·링크·태그 5개)입니다. 3줄 요약과 해시태그 12~15개는 Creator
-                      Pro에서 자동으로 채워집니다.
+                      오늘은 AI가 잠깐 쉬어서 <b>헤드라인 카드</b>로 만들었어요. 캡션도 기사 문구 그대로니, 잠시 뒤{" "}
+                      <b>다시 생성</b>을 누르면 논쟁 구도까지 세워 드려요.
                     </span>
-                    <button type="button" onClick={onOpenPricing}>
-                      <Sparkles size={12} /> 열어 보기
-                    </button>
                   </div>
                 )}
                 <textarea

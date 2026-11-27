@@ -588,10 +588,10 @@ function cardFromFixture(fixture, mode) {
     caption:
       mode === 'demo'
         ? {
-            hook: card.kicker,
             lead: extra.background ?? fixture.summary,
-            view: `지금 ${card.temp}° — 여론이 한쪽으로 기우는 중이에요.`,
-            ask: '여러분이라면 어느 쪽을 골랐을까요? 댓글로 한 줄만 남겨 주세요.',
+            sideA: card.sides.a,
+            sideB: card.sides.b,
+            ask: '여러분은 어느 쪽이 더 문제라고 보세요? 댓글로 알려 주세요.',
           }
         : undefined,
   };

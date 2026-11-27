@@ -57,6 +57,11 @@ const DAY_TTL_SECONDS = 60 * 60 * 24 * 5;
 const ISSUE_KEY_PREFIX = "issue-thermo:issue:v3:";
 const ISSUE_TTL_SECONDS = 60 * 60 * 24 * 7;
 const CACHE_TTL_SECONDS = 60 * 15;
+/**
+ * AI가 실패해 헤드라인 폴백 카드가 나온 묶음은 짧게만 재사용합니다.
+ * (예전에는 실패 결과도 15분씩 캐시에 남아, AI가 살아난 뒤에도 헤드라인 카드가 계속 보였습니다.)
+ */
+const FALLBACK_CACHE_TTL_SECONDS = 90;
 const CACHE_FRESH_MS = 12 * 60 * 1000;
 const FEED_TIMEOUT_MS = 8_000;
 const MAX_ITEMS_PER_FEED = 40;
@@ -84,11 +89,20 @@ export interface IssueSides {
   b: string;
 }
 
-/** 인스타 캡션용 문장 — 카드에 인쇄되는 문구와 따로 씁니다(카드에 없는 말을 캡션에만 넣기 위한 자리). */
+/**
+ * 인스타 캡션용 문장 — 카드에 인쇄되는 문구와 따로 씁니다(카드에 없는 말을 캡션에만 넣기 위한 자리).
+ * 클라이언트(src/lib/share.ts)가 이 문장으로 350~450자 캡션을 조립합니다.
+ */
 export interface IssueCaption {
+  /** 캡션 첫 줄 후킹(없으면 카드 헤드라인을 씁니다 — 구버전 응답 호환) */
   hook: string;
+  /** 왜 지금 논란인지 구어체 두 문장 */
   lead: string;
-  view: string;
+  /** A 진영 주장 한 줄 */
+  sideA: string;
+  /** B 진영 주장 한 줄 */
+  sideB: string;
+  /** 댓글 싸움을 부르는 질문 한 줄 */
   ask: string;
 }
 
@@ -679,14 +693,15 @@ const SYSTEM_PROMPT = `당신은 20~30대가 실제로 반응하는 뉴스를 �
 9) temp: 지금 여론이 달아오른 정도 0~100 정수(사과·철회·논란·품절은 70 이상, 단순 발표는 30~50).
 10) category: entertainment(연예) | society(사회) | culture(문화·라이프) | tech(테크·AI) | money(경제·소비) | work(직장·커리어) 중 하나.
 11) tags: 검색 키워드 3개(각 12자 이내, # 없이).
-12) caption: 인스타 피드에 그대로 붙일 캡션용 문장 4개. 카드 문구를 그대로 복사하지 말고 캡션에서만 읽히는 말로 다시 쓰세요.
-   - caption.hook: 카드 헤드를 받아주는 두 번째 줄. 40자 이내. 훅과 같은 문장이면 안 됩니다. 궁금증·손해·반전 중 하나로.
-   - caption.lead: 왜 지금 화제인지, 캡션용 1~2문장. 110자 이내. background를 그대로 옮기지 말고 처음 듣는 사람에게 설명하듯.
-   - caption.view: 이슈온도계 관전 포인트 한 줄. 55자 이내. temp·여론 결을 짚는 에디터 코멘트("~쪽으로 기울고 있어요"처럼). 근거 없는 전망은 쓰지 마세요.
-   - caption.ask: 댓글을 부르는 질문 한 줄. 40자 이내. 찬반·경험 중 하나. "어떻게 생각하세요?" 같은 상투어 금지.
+12) caption: 인스타 피드에 그대로 붙일 캡션용 문장. 캡션은 카드 5장의 팩트를 되풀이하지 않고 **왜 지금 싸우는지**만 350~450자로 압축합니다.
+   - caption.lead: 왜 지금 논란인지 구어체 **두 문장**(각 45자 이내). "~인데요", "~거든요", "~했어요" 말투. 보도체("~혐의를 받는다", "~송치했다", "~밝혔다") 금지.
+   - caption.sideA: A 진영이 내세우는 주장 한 줄(40자 이내). sides.a를 그대로 옮기지 말고 캡션용으로 다시.
+   - caption.sideB: B 진영이 내세우는 주장 한 줄(40자 이내).
+   - caption.ask: A와 B 중 **어느 쪽이 더 문제인지** 정면으로 묻는 한 줄(40자 이내). "어떻게 생각하세요?" 같은 상투어 금지.
+   - caption.hook은 비워 두세요(카드 표지 헤드라인을 첫 줄로 씁니다).
 
 출력은 아래 스키마의 JSON 객체 하나뿐입니다. 코드블록·설명을 붙이지 마세요.
-{"issues":[{"pick":1,"category":"work","hook":"...","kicker":"...","facts":["...","...","..."],"background":"...","point":"...","quote":"...","sides":{"labelA":"...","labelB":"...","a":"...","b":"..."},"poll":{"question":"...","a":"...","b":"..."},"temp":68,"tags":["...","...","..."],"caption":{"hook":"...","lead":"...","view":"...","ask":"..."}}]}`;
+{"issues":[{"pick":1,"category":"work","hook":"...","kicker":"...","facts":["...","...","..."],"background":"...","point":"...","quote":"...","sides":{"labelA":"...","labelB":"...","a":"...","b":"..."},"poll":{"question":"...","a":"...","b":"..."},"temp":68,"tags":["...","...","..."],"caption":{"lead":"...","sideA":"...","sideB":"...","ask":"..."}}]}`;
 
 function buildPrompt(items: Article[]): string {
   const lines = items.map((item, index) => {
@@ -841,15 +856,16 @@ export function salvageIssues(content: string): unknown[] {
   return out;
 }
 
-/** AI가 캡션용 네 문장을 줬으면 다듬어 보관합니다. 하나도 없으면 null — 클라이언트가 템플릿으로 채웁니다. */
+/** AI가 캡션용 문장을 줬으면 다듬어 보관합니다. 하나도 없으면 null — 클라이언트가 카드 문구로 채웁니다. */
 function readCaption(raw: unknown): IssueCaption | null {
   const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
   if (!row) return null;
   const hook = cleanNewsText(row.hook, 90);
-  const lead = cleanNewsText(row.lead, 240);
-  const view = cleanNewsText(row.view, 120);
-  const ask = cleanNewsText(row.ask, 120);
-  return hook || lead || view || ask ? { hook, lead, view, ask } : null;
+  const lead = cleanNewsText(row.lead, 200);
+  const sideA = cleanNewsText(row.sideA, 90);
+  const sideB = cleanNewsText(row.sideB, 90);
+  const ask = cleanNewsText(row.ask, 90);
+  return hook || lead || sideA || sideB || ask ? { hook, lead, sideA, sideB, ask } : null;
 }
 
 function normalizeCards(raw: unknown, items: Article[]): Issue[] {
@@ -1089,14 +1105,19 @@ async function loadDoc(refresh: boolean): Promise<TrendingDoc> {
   }
   return once(CACHE_KEY, async () => {
     const doc = await collect();
-  const sorted = [...doc.issues].sort((a, b) => b.buzz - a.buzz || (b.temp ?? 0) - (a.temp ?? 0));
-  doc.issues = sorted;
-  // 화제성 순으로 줄을 세운 다음에 표지 판을 배분합니다 — 순서가 바뀌어 같은 판이 옆에 붙지 않게.
-  assignLayouts(doc.issues);
+    const sorted = [...doc.issues].sort((a, b) => b.buzz - a.buzz || (b.temp ?? 0) - (a.temp ?? 0));
+    doc.issues = sorted;
+    // 화제성 순으로 줄을 세운 다음에 표지 판을 배분합니다 — 순서가 바뀌어 같은 판이 옆에 붙지 않게.
+    assignLayouts(doc.issues);
     if (doc.issues.length > 0) {
-      await kvSet(CACHE_KEY, doc, CACHE_TTL_SECONDS);
-      // 날짜별 보관 — 오늘 피드는 오늘 날짜 칸에도 함께 남깁니다.
-      await kvSet(`${DAY_KEY_PREFIX}${kstDayKey(doc.generatedAt)}`, doc, DAY_TTL_SECONDS);
+      // AI가 만든 카드가 하나라도 있으면 정상 묶음 — 아니면 짧게만 캐시해 다음 요청이 AI를 다시 부릅니다.
+      const aiBacked = doc.issues.some((issue) => issue.ai);
+      await kvSet(CACHE_KEY, doc, aiBacked ? CACHE_TTL_SECONDS : FALLBACK_CACHE_TTL_SECONDS);
+      if (aiBacked) {
+        // 날짜별 보관 — 오늘 피드는 오늘 날짜 칸에도 함께 남깁니다.
+        // (헤드라인 폴백은 보관하지 않습니다: AI가 살아나면 진짜 카드로 그 날짜를 채웁니다.)
+        await kvSet(`${DAY_KEY_PREFIX}${kstDayKey(doc.generatedAt)}`, doc, DAY_TTL_SECONDS);
+      }
       await Promise.all(
         doc.issues.map((issue) => kvSet(`${ISSUE_KEY_PREFIX}${issue.id}`, issue, ISSUE_TTL_SECONDS)),
       );

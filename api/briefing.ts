@@ -67,12 +67,13 @@ const SYSTEM_PROMPT = `당신은 20~30대가 실제로 반응하는 뉴스를 �
 - temp: 지금 여론이 달아오른 정도 0~100 정수(사과·철회·논란·품절은 70 이상, 단순 발표는 30~50).
 - category: entertainment | society | culture | tech | money | work 중 하나.
 - tags: 검색 키워드 3개(# 없이).
-- caption: 인스타 피드에 그대로 붙일 캡션용 문장 4개. 카드 문구를 복사하지 말고 다시 쓰세요.
-  · caption.hook 40자 이내(카드 헤드를 받는 두 번째 줄) / caption.lead 110자 이내(왜 지금 화제인지 1~2문장)
-  · caption.view 55자 이내(온도·여론 결을 짚는 에디터 한 줄) / caption.ask 40자 이내(댓글을 부르는 찬반·경험 질문)
+- caption: 인스타 피드에 그대로 붙일 캡션용 문장. 카드 팩트를 되풀이하지 말고 '왜 지금 싸우는지'만 다시 쓰세요.
+  · caption.lead 구어체 두 문장(각 45자 이내, "~인데요/~거든요/~했어요") — 보도체("~혐의를 받는다", "~송치했다") 금지
+  · caption.sideA / caption.sideB A·B 진영 주장 한 줄씩(각 40자 이내, sides를 그대로 옮기지 말 것)
+  · caption.ask A와 B 중 어느 쪽이 더 문제인지 정면으로 묻는 한 줄(40자 이내, "어떻게 생각하세요?" 금지)
 
 출력은 아래 스키마의 JSON 객체 하나뿐입니다. 코드블록·설명을 붙이지 마세요.
-{"category":"tech","hook":"...","kicker":"...","facts":["...","...","..."],"background":"...","point":"...","sides":{"labelA":"...","labelB":"...","a":"...","b":"..."},"poll":{"question":"...","a":"...","b":"..."},"temp":64,"tags":["...","...","..."],"caption":{"hook":"...","lead":"...","view":"...","ask":"..."}}}`;
+{"category":"tech","hook":"...","kicker":"...","facts":["...","...","..."],"background":"...","point":"...","sides":{"labelA":"...","labelB":"...","a":"...","b":"..."},"poll":{"question":"...","a":"...","b":"..."},"temp":64,"tags":["...","...","..."],"caption":{"lead":"...","sideA":"...","sideB":"...","ask":"..."}}}`;
 
 interface IssueCard {
   id: string;
@@ -91,7 +92,7 @@ interface IssueCard {
   poll: { question: string; a: string; b: string };
   temp: number | null;
   tags: string[];
-  caption?: { hook: string; lead: string; view: string; ask: string } | null;
+  caption?: { hook?: string; lead: string; sideA: string; sideB: string; ask: string } | null;
   ai: boolean;
 }
 
@@ -129,16 +130,17 @@ function fallbackCard(input: { title: string; source: string; url: string; body:
   };
 }
 
-/** AI가 캡션용 네 문장을 줬으면 다듬어 보관합니다. 없으면 null — 클라이언트가 템플릿으로 채웁니다. */
-function readCaption(raw: unknown): { hook: string; lead: string; view: string; ask: string } | null {
+/** AI가 캡션용 문장을 줬으면 다듬어 보관합니다. 없으면 null — 클라이언트가 카드 문구로 채웁니다. */
+function readCaption(raw: unknown): { hook?: string; lead: string; sideA: string; sideB: string; ask: string } | null {
   const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
   if (!row) return null;
   const text = (value: unknown, max: number) => clean(value, max);
   const hook = text(row.hook, 90);
-  const lead = text(row.lead, 240);
-  const view = text(row.view, 120);
-  const ask = text(row.ask, 120);
-  return hook || lead || view || ask ? { hook, lead, view, ask } : null;
+  const lead = text(row.lead, 200);
+  const sideA = text(row.sideA, 90);
+  const sideB = text(row.sideB, 90);
+  const ask = text(row.ask, 90);
+  return hook || lead || sideA || sideB || ask ? { hook, lead, sideA, sideB, ask } : null;
 }
 
 function normalizeCard(raw: unknown, base: { title: string; source: string; url: string; image: string; body: string }): IssueCard | null {
