@@ -18,9 +18,10 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 
 NODE_BIN = "/workspace/.tools/node-v22.12.0-linux-x64/bin"
 LIBS = "/workspace/.libs/usr/lib/x86_64-linux-gnu"
+SYSTEM_LIB_DIRS = "/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu"
 os.environ["PATH"] = f"{NODE_BIN}:{os.environ.get('PATH', '')}"
 if Path(LIBS).exists():
-    os.environ["LD_LIBRARY_PATH"] = f"{LIBS}:{os.environ.get('LD_LIBRARY_PATH', '')}"
+    os.environ["LD_LIBRARY_PATH"] = f"{os.environ.get('LD_LIBRARY_PATH') or SYSTEM_LIB_DIRS}:{LIBS}"
 
 URL = "https://issue-factbomb-board.vercel.app/"
 OUT = Path("/workspace/downloads")

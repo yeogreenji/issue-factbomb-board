@@ -31,8 +31,9 @@ LIBS = "/workspace/.libs/usr/lib/x86_64-linux-gnu"
 ENV = os.environ.copy()
 if Path(NODE_BIN).exists():
     ENV["PATH"] = f"{NODE_BIN}:{ENV.get('PATH', '')}"
+SYSTEM_LIB_DIRS = "/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu"
 if Path(LIBS).exists():
-    ENV["LD_LIBRARY_PATH"] = f"{LIBS}:{ENV.get('LD_LIBRARY_PATH', '')}"
+    ENV["LD_LIBRARY_PATH"] = f"{ENV.get('LD_LIBRARY_PATH') or SYSTEM_LIB_DIRS}:{LIBS}"
 os.environ["LD_LIBRARY_PATH"] = ENV.get("LD_LIBRARY_PATH", "")
 
 checks: list[tuple[str, bool, str]] = []

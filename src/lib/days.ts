@@ -48,9 +48,11 @@ export function dayName(date: string, today: string = kstDayKey()): string {
   return shortDate(date);
 }
 
-/** 날짜 칩에 보이는 문구 — "오늘 (11/27)" */
+/** 날짜 칩에 보이는 문구 — "오늘 (11/27)", 그 이전 날짜는 "11/24"처럼 날짜만. */
 export function dayChipLabel(date: string, today: string = kstDayKey()): string {
-  return `${dayName(date, today)} (${shortDate(date)})`;
+  const name = dayName(date, today);
+  const short = shortDate(date);
+  return name === short ? short : `${name} (${short})`;
 }
 
 function isIssue(value: unknown): value is Issue {

@@ -47,8 +47,11 @@ if os.environ.get("VERIFY_SINGLE_PROCESS") == "1":
 ENV = os.environ.copy()
 if Path(NODE_BIN).exists():
     ENV["PATH"] = f"{NODE_BIN}:{ENV.get('PATH', '')}"
+# 시스템 라이브러리를 먼저 찾고, 거기에 없는 것만 번들 라이브러리로 채웁니다.
+# (번들 구버전 libmount가 먼저 잡히면 최신 시스템 libgio가 MOUNT_2_40을 못 찾아 크로미움이 뜨지 않습니다.)
+SYSTEM_LIB_DIRS = "/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu"
 if Path(LIBS).exists():
-    ENV["LD_LIBRARY_PATH"] = f"{LIBS}:{ENV.get('LD_LIBRARY_PATH', '')}"
+    ENV["LD_LIBRARY_PATH"] = f"{ENV.get('LD_LIBRARY_PATH') or SYSTEM_LIB_DIRS}:{LIBS}"
 os.environ["LD_LIBRARY_PATH"] = ENV.get("LD_LIBRARY_PATH", "")
 
 checks: list[tuple[str, bool, str]] = []
