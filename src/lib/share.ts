@@ -35,9 +35,9 @@ const TAG_STOP = new Set([
   "논란", "충격", "경악", "난리", "화제", "직접", "관련", "서로", "결국",
 ]);
 
-/** 태그로 쓰기 어색한 꼬리(서술어) — 낱말 자체가 문장 조각인 경우를 걸러 냅니다. */
+/** 태그로 쓰기 어색한 꼬리(서술어·구어 꼬리) — 낱말 자체가 문장 조각인 경우를 걸러 냅니다. */
 const TAG_TAIL =
-  /(하다|한다|했다|된다|됐다|이다|있다|없다|같다|보다|위해|대해|통해|라며|라고|지만|면서|으로|에서|부터|까지|자마자|는데|려고|하려|한|난|된|될)$/;
+  /(하다|한다|했다|된다|됐다|이다|있다|없다|같다|보다|위해|대해|통해|라며|라고|지만|면서|으로|에서|부터|까지|자마자|는데|려고|하려|한|난|된|될|다|까봐|니까|습니다|세요|네요|죠|들)$/;
 
 function tidyTag(raw: string): string {
   return raw
@@ -54,7 +54,7 @@ function titleKeywords(title: string): string[] {
     .map((word) => word.replace(/(은|는|이|가|을|를|의|에|와|과|도|로|으로|만|보다|까지|에서|에게|부터|께서)$/, ""))
     .filter((word) => word.length >= 2 && word.length <= 8 && !/^\d/.test(word))
     .filter((word) => !TAG_STOP.has(word) && !TAG_TAIL.test(word))
-    .slice(0, 3);
+    .slice(0, 2);
 }
 
 export const TAG_MIN = 8;
@@ -212,7 +212,7 @@ export function captionFor(issue: Issue, options: CaptionOptions = {}): string {
 
     if (extraPoll && issue.poll?.question) parts.push("", `📊 ${clip(issue.poll.question, 50)}`);
 
-    parts.push("", ...askLines(ai, 46));
+    parts.push("", ...askLines(ai, 62));
     if (saveCta) parts.push("🔖 지금 저장해 두면 저녁에 다시 보기 좋아요.");
     parts.push("", linkLine(issue));
     if (options.handle) parts.push(options.handle);
