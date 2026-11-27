@@ -808,6 +808,12 @@
     max-height: calc(94dvh - 130px);
     overflow-y: auto;
   }
+
+  /* 데스크톱은 캡션 전체(6단)가 한눈에 보이게 — 800자 넘는 글을 250px 칸에서 고치지 않도록. */
+  .cn-caption textarea {
+    min-height: 430px;
+    font-size: 12.5px;
+  }
 }
 
 @media (max-width: 380px) {
