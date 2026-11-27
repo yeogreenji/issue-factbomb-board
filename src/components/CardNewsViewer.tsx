@@ -69,6 +69,7 @@ export function CardNewsViewer({
   const { index, wrapRef, trackRef, go, jump, handlers } = useSwipeDeck(SLIDE_COUNT, startIndex);
   const [saving, setSaving] = useState<"one" | "all" | null>(null);
   const [captionOpen, setCaptionOpen] = useState(false);
+  const captionRef = useRef<HTMLDivElement | null>(null);
   const [slides, setSlides] = useState<(SlideAsset | null)[]>(() => Array.from({ length: SLIDE_COUNT }, () => null));
   const renderedRef = useRef<SlideAsset[]>([]);
   const meta = CATEGORY_META[issue.category];
@@ -162,10 +163,18 @@ export function CardNewsViewer({
     }
   };
 
-  const autoCaption = captionFor(issue, { handle: brand.handle, pro: can.aiCaption });
-  const caption = captions[issue.id] ?? autoCaption;
+  const autoCaption = captionFor(issue, { handle: brand.handle, pro: can.aiCaption });  const caption = captions[issue.id] ?? autoCaption;
   const captionEdited = captions[issue.id] !== undefined;
   const ready = slides[index] !== null;
+
+  /* 캡션을 열면 그 패널이 화면 가운데로 — 폰에서 ‘복사’ 버튼이 보이게. */
+  useEffect(() => {
+    if (!captionOpen) return;
+    const timer = window.setTimeout(() => {
+      captionRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [captionOpen]);
 
   return (
     <div className="cn" data-testid="viewer" data-theme={brand.theme} style={{ ["--accent" as string]: meta.ui, ["--accent-soft" as string]: meta.uiSoft }}>
@@ -318,7 +327,7 @@ export function CardNewsViewer({
             </div>
 
             {captionOpen && (
-              <div className="cn-caption" data-testid="caption-panel">
+              <div className="cn-caption" data-testid="caption-panel" ref={captionRef}>
                 <div className="cn-caption-head">
                   <b>인스타 캡션 + 해시태그</b>
                   <div className="cn-caption-tools">

@@ -45,6 +45,14 @@ import { composeEditorial } from "./editorial.js";
 export const config = { maxDuration: 60 };
 
 const CACHE_KEY = "issue-thermo:trending:v3";
+/**
+ * 날짜별 보관 — 하루가 지나도 어제·그제 카드를 다시 꺼내 올릴 수 있게 날짜 키로 따로 남깁니다.
+ * (KST 기준 자정에 날짜가 바뀝니다.)
+ */
+const DAY_KEY_PREFIX = "issue-thermo:trending:day:v1:";
+/** 오늘부터 4일치를 남겨 둡니다 — 2~3일 못 들어와도 그 사이 카드가 살아 있게. */
+const DAY_KEEP = 4;
+const DAY_TTL_SECONDS = 60 * 60 * 24 * 5;
 /** 공유 링크로 받은 사람이 며칠 뒤에 열어도 카드가 남아 있도록, 카드 하나씩 따로 보관합니다. */
 const ISSUE_KEY_PREFIX = "issue-thermo:issue:v3:";
 const ISSUE_TTL_SECONDS = 60 * 60 * 24 * 7;
@@ -76,6 +84,14 @@ export interface IssueSides {
   b: string;
 }
 
+/** 인스타 캡션용 문장 — 카드에 인쇄되는 문구와 따로 씁니다(카드에 없는 말을 캡션에만 넣기 위한 자리). */
+export interface IssueCaption {
+  hook: string;
+  lead: string;
+  view: string;
+  ask: string;
+}
+
 export interface Issue {
   id: string;
   category: Category;
@@ -104,6 +120,8 @@ export interface Issue {
   /** 제목·키워드로 계산한 화제성(0~99) — 인스타에 올렸을 때 반응이 붙을 만한 정도. */
   buzz: number;
   tags: string[];
+  /** 캡션용 AI 문장 — 없으면 클라이언트가 카드 문구로 채웁니다. */
+  caption: IssueCaption | null;
   ai: boolean;
 }
 
@@ -113,6 +131,45 @@ interface TrendingDoc {
   issues: Issue[];
   feeds: { name: string; ok: boolean }[];
   notice?: string;
+}
+
+/* ------------------------------------------------------- 날짜별 보관(KST) */
+
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+/** 시각 → 한국 날짜 열쇠(YYYY-MM-DD). 서버가 어느 시간대에서 돌아도 자정은 한국 기준입니다. */
+export function kstDayKey(timestamp: number): string {
+  return new Date(timestamp + KST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/** 오늘(offset 0)부터 거슬러 올라가는 날짜 열쇠 목록입니다. */
+function dayKeys(keep = DAY_KEEP, now = Date.now()): string[] {
+  return Array.from({ length: keep }, (_, index) => kstDayKey(now - index * 24 * 60 * 60 * 1000));
+}
+
+function isDayKey(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+}
+
+/** 그 날짜의 피드 묶음을 꺼냅니다(없으면 null). */
+async function readDay(date: string): Promise<TrendingDoc | null> {
+  const doc = await kvGet<TrendingDoc>(`${DAY_KEY_PREFIX}${date}`);
+  return doc && Array.isArray(doc.issues) && doc.issues.length > 0 ? doc : null;
+}
+
+/** 화면의 날짜 칩이 쓰는 목록 — 실제로 카드가 남아 있는 날짜만 알려 줍니다. */
+async function availableDays(today: TrendingDoc | null): Promise<{ date: string; count: number; generatedAt: number }[]> {
+  const keys = dayKeys();
+  const rows = await Promise.all(
+    keys.map(async (date) => {
+      if (today && kstDayKey(today.generatedAt) === date) {
+        return { date, count: today.issues.length, generatedAt: today.generatedAt };
+      }
+      const doc = await readDay(date);
+      return doc ? { date, count: doc.issues.length, generatedAt: doc.generatedAt } : null;
+    }),
+  );
+  return rows.filter((row): row is { date: string; count: number; generatedAt: number } => row !== null);
 }
 
 /* ---------------------------------------------------------------- feeds */
@@ -622,9 +679,14 @@ const SYSTEM_PROMPT = `당신은 20~30대가 실제로 반응하는 뉴스를 �
 9) temp: 지금 여론이 달아오른 정도 0~100 정수(사과·철회·논란·품절은 70 이상, 단순 발표는 30~50).
 10) category: entertainment(연예) | society(사회) | culture(문화·라이프) | tech(테크·AI) | money(경제·소비) | work(직장·커리어) 중 하나.
 11) tags: 검색 키워드 3개(각 12자 이내, # 없이).
+12) caption: 인스타 피드에 그대로 붙일 캡션용 문장 4개. 카드 문구를 그대로 복사하지 말고 캡션에서만 읽히는 말로 다시 쓰세요.
+   - caption.hook: 카드 헤드를 받아주는 두 번째 줄. 40자 이내. 훅과 같은 문장이면 안 됩니다. 궁금증·손해·반전 중 하나로.
+   - caption.lead: 왜 지금 화제인지, 캡션용 1~2문장. 110자 이내. background를 그대로 옮기지 말고 처음 듣는 사람에게 설명하듯.
+   - caption.view: 이슈온도계 관전 포인트 한 줄. 55자 이내. temp·여론 결을 짚는 에디터 코멘트("~쪽으로 기울고 있어요"처럼). 근거 없는 전망은 쓰지 마세요.
+   - caption.ask: 댓글을 부르는 질문 한 줄. 40자 이내. 찬반·경험 중 하나. "어떻게 생각하세요?" 같은 상투어 금지.
 
 출력은 아래 스키마의 JSON 객체 하나뿐입니다. 코드블록·설명을 붙이지 마세요.
-{"issues":[{"pick":1,"category":"work","hook":"...","kicker":"...","facts":["...","...","..."],"background":"...","point":"...","quote":"...","sides":{"labelA":"...","labelB":"...","a":"...","b":"..."},"poll":{"question":"...","a":"...","b":"..."},"temp":68,"tags":["...","...","..."]}]}`;
+{"issues":[{"pick":1,"category":"work","hook":"...","kicker":"...","facts":["...","...","..."],"background":"...","point":"...","quote":"...","sides":{"labelA":"...","labelB":"...","a":"...","b":"..."},"poll":{"question":"...","a":"...","b":"..."},"temp":68,"tags":["...","...","..."],"caption":{"hook":"...","lead":"...","view":"...","ask":"..."}}]}`;
 
 function buildPrompt(items: Article[]): string {
   const lines = items.map((item, index) => {
@@ -779,6 +841,17 @@ export function salvageIssues(content: string): unknown[] {
   return out;
 }
 
+/** AI가 캡션용 네 문장을 줬으면 다듬어 보관합니다. 하나도 없으면 null — 클라이언트가 템플릿으로 채웁니다. */
+function readCaption(raw: unknown): IssueCaption | null {
+  const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  if (!row) return null;
+  const hook = cleanNewsText(row.hook, 90);
+  const lead = cleanNewsText(row.lead, 240);
+  const view = cleanNewsText(row.view, 120);
+  const ask = cleanNewsText(row.ask, 120);
+  return hook || lead || view || ask ? { hook, lead, view, ask } : null;
+}
+
 function normalizeCards(raw: unknown, items: Article[]): Issue[] {
   const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const list = Array.isArray(row.issues) ? row.issues : Array.isArray(raw) ? (raw as unknown[]) : [];
@@ -851,6 +924,7 @@ function normalizeCards(raw: unknown, items: Article[]): Issue[] {
       temp: typeof card.temp === "undefined" ? null : clampInt(card.temp, 0, 100, 55),
       buzz: item.buzz,
       tags: cleanList(card.tags, 3, 16).map((tag) => tag.replace(/^#/, "")).slice(0, 3).concat(draft.tags).slice(0, 3),
+      caption: readCaption(card.caption),
       ai: true,
     });
   }
@@ -897,6 +971,8 @@ function headlineCards(items: Article[]): Issue[] {
       temp: null,
       buzz: item.buzz,
       tags: editorial.tags,
+      // AI 없이 만든 카드는 캡션도 클라이언트 템플릿이 카드 문구로 채웁니다.
+      caption: null,
       ai: false,
     };
   });
@@ -1019,6 +1095,8 @@ async function loadDoc(refresh: boolean): Promise<TrendingDoc> {
   assignLayouts(doc.issues);
     if (doc.issues.length > 0) {
       await kvSet(CACHE_KEY, doc, CACHE_TTL_SECONDS);
+      // 날짜별 보관 — 오늘 피드는 오늘 날짜 칸에도 함께 남깁니다.
+      await kvSet(`${DAY_KEY_PREFIX}${kstDayKey(doc.generatedAt)}`, doc, DAY_TTL_SECONDS);
       await Promise.all(
         doc.issues.map((issue) => kvSet(`${ISSUE_KEY_PREFIX}${issue.id}`, issue, ISSUE_TTL_SECONDS)),
       );
@@ -1043,7 +1121,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const issueId = clean(queryValue(req, "issue"), 40);
   const refresh = queryValue(req, "refresh") === "1";
+  const dateQuery = clean(queryValue(req, "date"), 20);
   const store = storeLabel();
+
+  if (dateQuery && !isDayKey(dateQuery)) {
+    res.status(400).json({ ok: false, error: "bad_date", message: "날짜는 YYYY-MM-DD 형식으로 보내 주세요." });
+    return;
+  }
 
   if (issueId) {
     const doc = await kvGet<TrendingDoc>(CACHE_KEY);
@@ -1063,6 +1147,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const startedAt = Date.now();
+  const todayKey = kstDayKey(Date.now());
+
+  // 지난 날짜(어제·그제)를 콕 집어 요청하면 그날 묶음을 그대로 꺼내 줍니다.
+  if (dateQuery && dateQuery !== todayKey) {
+    const past = await readDay(dateQuery);
+    const days = await availableDays(past);
+    if (!past) {
+      res.status(404).json({
+        ok: false,
+        error: "day_empty",
+        message: "그 날짜의 카드는 남아 있지 않아요. 오늘·어제·그제 카드만 보관합니다.",
+        availableDates: days,
+      });
+      return;
+    }
+    res.status(200).json({
+      ok: true,
+      mode: store.shared ? "shared" : "local",
+      store: store.kind,
+      ai: past.ai,
+      aiKey: Boolean(ENV.GEMINI_API_KEY?.trim() || ENV.OPENAI_API_KEY?.trim()),
+      generatedAt: past.generatedAt,
+      date: dateQuery,
+      stale: true,
+      latencyMs: Date.now() - startedAt,
+      feeds: past.feeds,
+      notice: past.notice,
+      availableDates: days,
+      issues: past.issues,
+    });
+    return;
+  }
+
   const doc = await loadDoc(refresh);
   if (doc.issues.length === 0) {
     res.status(503).json({
@@ -1074,6 +1191,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
+  // 캐시에서 바로 꺼낸 경우에도 오늘 날짜 칸은 채워 둡니다(날짜 칩이 이 목록을 보고 그립니다).
+  if (kstDayKey(doc.generatedAt) === todayKey) {
+    void kvSet(`${DAY_KEY_PREFIX}${todayKey}`, doc, DAY_TTL_SECONDS);
+  }
+
   res.status(200).json({
     ok: true,
     mode: store.shared ? "shared" : "local",
@@ -1081,10 +1203,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ai: doc.ai,
     aiKey: Boolean(ENV.GEMINI_API_KEY?.trim() || ENV.OPENAI_API_KEY?.trim()),
     generatedAt: doc.generatedAt,
+    date: kstDayKey(doc.generatedAt),
     stale: Date.now() - doc.generatedAt > CACHE_FRESH_MS,
     latencyMs: Date.now() - startedAt,
     feeds: doc.feeds,
     notice: doc.notice,
+    availableDates: await availableDays(doc),
     issues: doc.issues,
   });
 }

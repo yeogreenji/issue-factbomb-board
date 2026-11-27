@@ -144,8 +144,11 @@ async function requestJson<T>(input: string, init?: RequestInit, timeoutMs = 55_
   }
 }
 
-export async function fetchTrending(opts: { refresh?: boolean } = {}): Promise<TrendingResponse> {
-  const query = opts.refresh ? "?refresh=1" : "";
+export async function fetchTrending(opts: { refresh?: boolean; date?: string } = {}): Promise<TrendingResponse> {
+  const params = new URLSearchParams();
+  if (opts.refresh) params.set("refresh", "1");
+  if (opts.date) params.set("date", opts.date);
+  const query = params.toString() ? `?${params.toString()}` : "";
   return requestJson<TrendingResponse>(`/api/trending${query}`, { headers: { Accept: "application/json" } });
 }
 

@@ -516,6 +516,19 @@ def scenario_mobile(base: str, browser):
     page.wait_for_selector('[data-testid="caption-panel"]', timeout=5000)
     caption = page.locator('[data-testid="caption-text"]').input_value()
     check("A: 캡션에 훅 포함", hook in caption)
+    check("A: 캡션 첫 줄이 카드 헤드라인", caption.splitlines()[0].strip().endswith(hook), caption.splitlines()[0][:80])
+    check(
+        "A: 캡션에 무슨 일인데·팩트 3줄",
+        "무슨 일인데" in caption and caption.count("\n1.") >= 1 and caption.count("\n2.") >= 1,
+        caption[:120],
+    )
+    check(
+        "A: 캡션에 이슈온도계 관전 포인트",
+        "이슈온도계" in caption and ("°" in caption or "화제성" in caption),
+        caption[:120],
+    )
+    check("A: 캡션에 저장·공유 유도", "저장" in caption and "공유" in caption, caption[-160:])
+    check("A: 캡션 분량(바로 올릴 수 있는 길이)", len(caption) >= 400, f"{len(caption)}자")
     check("A: 캡션에 해시태그", "#이슈온도계" in caption and caption.count("#") >= 5, caption[-120:])
     check("A: 캡션에 카드 링크", "#/i/" in caption)
     page.screenshot(path=str(SHOTS / "09-mobile-caption.png"))
@@ -928,6 +941,9 @@ def scenario_creator(base: str, browser):
     tags = hashtag_count(caption)
     check("G: 인스타 캡션 해시태그 12~15개", 12 <= tags <= 15, f"{tags}개")
     check("G: 캡션에 3줄 요약·토론 질문", "Q." in caption and "A." in caption and "B." in caption and caption.count("\n1.") >= 1, caption[:80])
+    check("G: 캡션에 갈리는 지점·관전 포인트", "갈리는 지점" in caption and "이슈온도계" in caption, caption[:120])
+    check("G: 캡션에 저장·공유 CTA", "저장" in caption and "공유" in caption)
+    check("G: 캡션 분량 400자 이상", len(caption) >= 400, f"{len(caption)}자")
     page.screenshot(path=str(SHOTS / "19-creator-caption.png"))
 
     # 7) 문구 편집 — 헤드라인을 바꾸면 카드가 다시 그려지고 PNG도 바뀝니다.
@@ -1201,6 +1217,117 @@ def scenario_plans(base: str, browser):
     ctx.close()
 
 
+# ---------------------------------------------------------------- 날짜별 보관
+
+def scenario_days(base: str, browser, port: int):
+    """하루가 지나도 어제·그제 카드를 꺼내 다시 올릴 수 있는지 — 날짜 칩 · 보관 · 발행 표시."""
+    import datetime
+
+    kst = datetime.timezone(datetime.timedelta(hours=9))
+    now = datetime.datetime.now(kst)
+    today = now.strftime("%Y-%m-%d")
+    yesterday = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    three_days = (now - datetime.timedelta(days=3)).strftime("%Y-%m-%d")
+
+    status, doc = api_json(port, "/api/trending")
+    check("DAY: API 응답에 오늘 날짜", status == 200 and doc.get("date") == today, f"{doc.get('date')} != {today}")
+    dates = [row.get("date") for row in doc.get("availableDates") or []]
+    check("DAY: API가 보관 중인 날짜 목록을 함께 줌", today in dates, str(dates))
+    status, empty = api_json(port, f"/api/trending?date={yesterday}")
+    check(
+        "H: 보관분 없는 날짜는 404 + 안내·날짜 목록",
+        status == 404 and empty.get("error") == "day_empty" and today in [row.get("date") for row in empty.get("availableDates") or []],
+        str(empty)[:140],
+    )
+    status, bad = api_json(port, "/api/trending?date=2026-13-99")
+    check("DAY: 잘못된 날짜 형식은 400", status == 400, str(bad)[:120])
+
+    issues = doc.get("issues") or []
+    ctx = browser.new_context(
+        viewport={"width": 390, "height": 844},
+        device_scale_factor=2,
+        is_mobile=True,
+        has_touch=True,
+    )
+    seed_plan(ctx, "pro")
+    page = attach(ctx.new_page(), "DAY")
+    page.goto(base, wait_until="networkidle")
+    page.wait_for_selector('[data-testid="day-bar"]', timeout=20000)
+    settle(page, 700)
+
+    chips = page.locator('[data-testid="day-bar"] button')
+    check("DAY: 날짜 칩 4개(오늘·어제·그제·3일 전)", chips.count() == 4, f"{chips.count()}개")
+    check("DAY: 오늘 칩이 기본 선택", chips.nth(0).get_attribute("data-on") == "true")
+    check("DAY: 오늘 칩에 카드 수", re.search(r"\d+", chips.nth(0).inner_text()) is not None, chips.nth(0).inner_text())
+
+    # 오늘 카드가 이 기기에 날짜별로 남았는지
+    saved_days = page.evaluate("Object.keys(JSON.parse(localStorage.getItem('issue-thermo.days.v1') || '{}'))")
+    check("DAY: 오늘 받은 피드가 이 기기에 날짜로 남음", today in (saved_days or []), str(saved_days))
+
+    # 오늘 카드 하나를 '발행 완료'로 표시한 뒤, 날짜를 옮겨도 표시가 남는지 봅니다.
+    first_card = page.locator('[data-testid="feed-card"]').first
+    marked_id = first_card.get_attribute("data-issue-id")
+    first_card.locator('[data-testid="toggle-published"]').click()
+    settle(page, 350)
+    check("DAY: 오늘 카드 발행 완료 체크", first_card.get_attribute("data-published") == "true")
+
+    # 어제 보관본을 브라우저에 심고 다시 열어 — 어제 칩으로 그날 카드를 꺼냅니다.
+    page.evaluate(
+        """([date, issues]) => {
+            const store = JSON.parse(localStorage.getItem('issue-thermo.days.v1') || '{}');
+            store[date] = { date, generatedAt: Date.now(), issues };
+            localStorage.setItem('issue-thermo.days.v1', JSON.stringify(store));
+        }""",
+        [yesterday, issues],
+    )
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector('[data-testid="day-bar"]', timeout=20000)
+    settle(page, 600)
+
+    chip_y = page.locator('[data-testid="day-tab-1"]')
+    check("DAY: 어제 칩에 그날 카드 수", re.search(r"\d+", chip_y.inner_text()) is not None, chip_y.inner_text())
+    chip_y.click()
+    settle(page, 900)
+    check("DAY: 어제 칩 선택 표시", chip_y.get_attribute("data-on") == "true")
+    check("DAY: 어제 카드가 피드에 그대로 뜸", page.locator('[data-testid="feed-card"]').count() + page.locator('[data-testid="hero-card"]').count() >= 1)
+    check("DAY: 머리글이 '어제'", "어제" in page.locator('[data-testid="masthead"]').inner_text(), page.locator('[data-testid="masthead"]').inner_text()[:80])
+    check(
+        "H: 날짜를 넘겨도 발행 완료 표시 유지",
+        page.locator(f'[data-issue-id="{marked_id}"]').first.get_attribute("data-published") == "true",
+        str(marked_id),
+    )
+
+    # 어제 카드의 캡션도 그대로 꺼낼 수 있어야 합니다(다시 올릴 때 쓰는 문장).
+    open_viewer(page)
+    page.locator('[data-testid="open-caption"]').click()
+    page.wait_for_selector('[data-testid="caption-text"]', timeout=6000)
+    past_caption = page.locator('[data-testid="caption-text"]').input_value()
+    check("DAY: 어제 카드도 인스타 캡션 그대로", len(past_caption) >= 300 and "#이슈온도계" in past_caption, f"{len(past_caption)}자")
+    page.locator('[data-testid="close-viewer"]').click()
+    settle(page, 400)
+
+    # 보관이 없는 날짜는 빈 화면이 아니라 안내를 보여 줍니다.
+    page.locator('[data-testid="day-tab-2"]').click()
+    settle(page, 1200)
+    check(
+        "H: 보관 없는 날짜는 안내 + 오늘로 돌아가기",
+        page.locator('[data-testid="day-empty-panel"]').count() == 1,
+        page.locator('[data-testid="day-notice"]').inner_text() if page.locator('[data-testid="day-notice"]').count() else "",
+    )
+    page.locator('[data-testid="day-back-today"]').click()
+    settle(page, 600)
+    check("DAY: 오늘로 돌아오면 오늘 카드", page.locator('[data-testid="feed-card"]').count() >= 1)
+
+    kept = page.evaluate("Object.keys(JSON.parse(localStorage.getItem('issue-thermo.days.v1') || '{}'))")
+    check(
+        "H: 보관은 최근 4일까지만 남김",
+        all(day >= three_days for day in kept or []),
+        str(kept),
+    )
+    page.screenshot(path=str(SHOTS / "24-day-archive.png"), full_page=False)
+    ctx.close()
+
+
 # ---------------------------------------------------------------- API 단위 확인
 
 def api_checks(port: int):
@@ -1439,6 +1566,8 @@ def main() -> int:
                 scenario_creator(f"http://127.0.0.1:{port_a}/", browser)
                 print("== P: 요금제·잠금 ==")
                 scenario_plans(f"http://127.0.0.1:{port_a}/", browser)
+                print("== DAY: 날짜별 보관 ==")
+                scenario_days(f"http://127.0.0.1:{port_a}/", browser, port_a)
             finally:
                 browser.close()
 
@@ -1478,6 +1607,10 @@ def main() -> int:
             log.close()
 
     for old in SHOTS.glob("*.png"):
+        # 이 실행에서 다시 만들지 않은 스크린샷만 지웁니다. 실제 라이브 화면(26·27-live-*)은
+        # 배포 뒤 따로 찍는 자료라 이 하네스가 지우면 안 됩니다.
+        if "live" in old.name:
+            continue
         if re.match(r"^\d", old.name) and old.stat().st_mtime < started_at - 1:
             old.unlink()
 

@@ -67,9 +67,12 @@ const SYSTEM_PROMPT = `당신은 20~30대가 실제로 반응하는 뉴스를 �
 - temp: 지금 여론이 달아오른 정도 0~100 정수(사과·철회·논란·품절은 70 이상, 단순 발표는 30~50).
 - category: entertainment | society | culture | tech | money | work 중 하나.
 - tags: 검색 키워드 3개(# 없이).
+- caption: 인스타 피드에 그대로 붙일 캡션용 문장 4개. 카드 문구를 복사하지 말고 다시 쓰세요.
+  · caption.hook 40자 이내(카드 헤드를 받는 두 번째 줄) / caption.lead 110자 이내(왜 지금 화제인지 1~2문장)
+  · caption.view 55자 이내(온도·여론 결을 짚는 에디터 한 줄) / caption.ask 40자 이내(댓글을 부르는 찬반·경험 질문)
 
 출력은 아래 스키마의 JSON 객체 하나뿐입니다. 코드블록·설명을 붙이지 마세요.
-{"category":"tech","hook":"...","kicker":"...","facts":["...","...","..."],"background":"...","point":"...","sides":{"labelA":"...","labelB":"...","a":"...","b":"..."},"poll":{"question":"...","a":"...","b":"..."},"temp":64,"tags":["...","...","..."]}`;
+{"category":"tech","hook":"...","kicker":"...","facts":["...","...","..."],"background":"...","point":"...","sides":{"labelA":"...","labelB":"...","a":"...","b":"..."},"poll":{"question":"...","a":"...","b":"..."},"temp":64,"tags":["...","...","..."],"caption":{"hook":"...","lead":"...","view":"...","ask":"..."}}}`;
 
 interface IssueCard {
   id: string;
@@ -88,6 +91,7 @@ interface IssueCard {
   poll: { question: string; a: string; b: string };
   temp: number | null;
   tags: string[];
+  caption?: { hook: string; lead: string; view: string; ask: string } | null;
   ai: boolean;
 }
 
@@ -120,8 +124,21 @@ function fallbackCard(input: { title: string; source: string; url: string; body:
     poll: buildPoll({ title, summary: input.body.slice(0, 300), body: input.body, category: "society" }),
     temp: null,
     tags: [],
+    caption: null,
     ai: false,
   };
+}
+
+/** AI가 캡션용 네 문장을 줬으면 다듬어 보관합니다. 없으면 null — 클라이언트가 템플릿으로 채웁니다. */
+function readCaption(raw: unknown): { hook: string; lead: string; view: string; ask: string } | null {
+  const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  if (!row) return null;
+  const text = (value: unknown, max: number) => clean(value, max);
+  const hook = text(row.hook, 90);
+  const lead = text(row.lead, 240);
+  const view = text(row.view, 120);
+  const ask = text(row.ask, 120);
+  return hook || lead || view || ask ? { hook, lead, view, ask } : null;
 }
 
 function normalizeCard(raw: unknown, base: { title: string; source: string; url: string; image: string; body: string }): IssueCard | null {
@@ -161,6 +178,7 @@ function normalizeCard(raw: unknown, base: { title: string; source: string; url:
         : buildPoll({ title: base.title || hook, summary: base.body.slice(0, 300), body: base.body }),
     temp: typeof row.temp === "undefined" ? null : clampInt(row.temp, 0, 100, 55),
     tags: cleanList(row.tags, 3, 14),
+    caption: readCaption(row.caption),
     ai: true,
   };
 }

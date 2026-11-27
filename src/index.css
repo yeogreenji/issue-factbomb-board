@@ -2047,6 +2047,107 @@ img {
   opacity: 0.6;
 }
 
+/* 날짜 줄 — 오늘·어제·그제 카드를 오갑니다 */
+.daybar {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  min-width: 0;
+}
+
+.daybar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.daybar-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.daybar-note {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-2);
+}
+
+.daybar-chips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.daybar-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.daybar-chips button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(23, 22, 15, 0.03);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.daybar-chips button:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.daybar-chips button[data-empty="true"] {
+  border-style: dashed;
+  opacity: 0.55;
+}
+
+.daybar-chips button[data-on="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  opacity: 1;
+}
+
+.daybar-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(23, 22, 15, 0.08);
+}
+
+.daybar-chips button[data-on="true"] .daybar-count {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.daybar-hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 /* 작업 줄 — 검색 · 카테고리 · 발행 상태 · 오늘 목표 */
 .work {
   display: flex;

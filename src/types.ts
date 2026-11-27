@@ -15,6 +15,21 @@ export interface IssueSides {
   b: string;
 }
 
+/**
+ * 인스타 캡션용으로 AI가 따로 써 둔 문장 — 카드에 인쇄되는 문구와 역할이 다릅니다.
+ * 비어 있으면 클라이언트 템플릿(share.ts)이 카드 문구로 같은 구조를 채웁니다.
+ */
+export interface IssueCaption {
+  /** 더보기(…) 전에 보이는 첫 줄 — 카드 훅을 한 번 더 비튼 감정·의문 */
+  hook?: string;
+  /** 왜 지금 화제인지, 캡션용으로 다시 쓴 1~2문장 */
+  lead?: string;
+  /** 이슈온도계 관전 포인트 — 온도·여론 결을 짚는 에디터 한 줄 */
+  view?: string;
+  /** 댓글을 부르는 질문 한 줄 */
+  ask?: string;
+}
+
 export interface Issue {
   id: string;
   category: Category;
@@ -43,12 +58,21 @@ export interface Issue {
   /** 제목·키워드로 계산한 화제성(0~99) — 인스타에 올렸을 때 반응이 붙을 만한 정도. */
   buzz?: number;
   tags: string[];
+  /** 캡션용 AI 문장 — 없으면 템플릿이 채웁니다. */
+  caption?: IssueCaption | null;
   ai: boolean;
 }
 
 export interface FeedStatus {
   name: string;
   ok: boolean;
+}
+
+export interface DayEntry {
+  /** 한국 날짜 YYYY-MM-DD */
+  date: string;
+  count: number;
+  generatedAt: number;
 }
 
 export interface TrendingResponse {
@@ -58,6 +82,10 @@ export interface TrendingResponse {
   ai?: { provider: string; model: string } | null;
   aiKey?: boolean;
   generatedAt?: number;
+  /** 이 응답이 어느 날짜(한국 기준)의 피드인지 */
+  date?: string;
+  /** 서버가 지금 보관 중인 날짜 목록 — 날짜 칩이 이걸 보고 그립니다. */
+  availableDates?: DayEntry[];
   stale?: boolean;
   latencyMs?: number;
   feeds?: FeedStatus[];

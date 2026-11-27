@@ -584,6 +584,16 @@ function cardFromFixture(fixture, mode) {
     temp: card.temp,
     category: fixture.category,
     tags: card.tags,
+    // 실제 AI처럼 캡션용 문장도 함께 돌려줍니다(데모 모드) — 캡션 보강 경로를 그대로 검증합니다.
+    caption:
+      mode === 'demo'
+        ? {
+            hook: card.kicker,
+            lead: extra.background ?? fixture.summary,
+            view: `지금 ${card.temp}° — 여론이 한쪽으로 기우는 중이에요.`,
+            ask: '여러분이라면 어느 쪽을 골랐을까요? 댓글로 한 줄만 남겨 주세요.',
+          }
+        : undefined,
   };
 }
 

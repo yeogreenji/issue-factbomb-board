@@ -14,6 +14,8 @@ interface Props {
   /** 오늘 올린 카드 수 / 하루 목표(3~4장) */
   published: number;
   goal: number;
+  /** 목표 줄 이름 — 지난 날짜를 볼 때는 "어제 발행" */
+  goalLabel?: string;
   onQuery: (value: string) => void;
   onCategory: (value: Category | "all") => void;
   onStatus: (value: FeedStatus) => void;
@@ -34,6 +36,7 @@ export function WorkflowBar({
   doneCount,
   published,
   goal,
+  goalLabel = "오늘 발행",
   onQuery,
   onCategory,
   onStatus,
@@ -114,7 +117,7 @@ export function WorkflowBar({
 
       <div className="work-goal">
         <span className="work-goal-label">
-          오늘 발행 <b>{published}</b>/{goal}
+          {goalLabel} <b>{published}</b>/{goal}
         </span>
         <span className="work-goal-track" aria-hidden="true">
           <span className="work-goal-fill" style={{ width: `${progress}%` }} />

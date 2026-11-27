@@ -12,6 +12,7 @@ import {
   sendVote,
 } from "./lib/api";
 import { copyText, issueLink, shareIssue } from "./lib/share";
+import { DAY_KEEP, dayChipLabel, dayName, issuesByPublishedDay, kstDayKey, loadDays, recentDayKeys, saveDay, type DaySnapshot } from "./lib/days";
 import { applyCopy } from "./lib/copy";
 import {
   activateProTrial,
@@ -28,6 +29,7 @@ import {
 } from "./lib/prefs";
 import { planLabel } from "./lib/plan";
 import { Header } from "./components/Header";
+import { DayBar, type DayOption } from "./components/DayBar";
 import { CardNewsViewer } from "./components/CardNewsViewer";
 import { CardPreview } from "./components/CardPreview";
 import { FeedCard, HeroCard } from "./components/FeedCard";
@@ -65,6 +67,12 @@ export default function App() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [brandSheet, setBrandSheet] = useState(false);
   const [pricingOpen, setPricingOpen] = useState(false);
+  /** 날짜별 보관 — 오늘·어제·그제 카드를 오갑니다. */
+  const [todayKey, setTodayKey] = useState(() => kstDayKey());
+  const [activeDay, setActiveDay] = useState(() => kstDayKey());
+  const [days, setDays] = useState<Record<string, DaySnapshot>>(() => loadDays());
+  const [dayLoading, setDayLoading] = useState(false);
+  const [dayNotice, setDayNotice] = useState<string | null>(null);
 
   const brand = useActiveBrand();
   const planPrefs = usePlan();
@@ -96,6 +104,13 @@ export default function App() {
           setDoc(res);
           setStatus("ready");
           setError(null);
+          // 오늘 받은 피드는 오늘 날짜 칸에도 남깁니다 — 내일 다시 들어와도 어제 카드가 남아 있게.
+          const stamp = res.generatedAt ?? Date.now();
+          const docDay = res.date ?? kstDayKey(stamp);
+          setTodayKey(kstDayKey());
+          saveDay(docDay, res.issues, stamp);
+          setDays(loadDays());
+          setDayNotice(null);
           setStaleNotice(
             res.stale ? "새 뉴스를 받아 오는 중이에요. 지금은 직전에 모은 카드를 보여 드립니다." : null,
           );
@@ -131,15 +146,78 @@ export default function App() {
     return () => window.removeEventListener("hashchange", sync);
   }, []);
 
+  /** 지금 보고 있는 날짜의 카드 — 오늘이면 서버 최신, 지난 날짜면 보관분. */
+  const activeIssues = useMemo(() => {
+    if (activeDay === todayKey) return doc?.issues ?? [];
+    return days[activeDay]?.issues ?? [];
+  }, [activeDay, todayKey, doc, days]);
+
   /** 서버에서 온 원문 카드(정렬됨) — 편집 전 문구를 그대로 보관합니다. */
   const ranked = useMemo(() => {
-    const list = [...(doc?.issues ?? []), ...extra];
+    // 방금 만든 카드(뉴스로 만들기)는 오늘 화면에서만 보입니다.
+    const list = [...activeIssues, ...(activeDay === todayKey ? extra : [])];
     const seen = new Set<string>();
     const unique = list.filter((issue) => (seen.has(issue.id) ? false : (seen.add(issue.id), true)));
     // 화제성(제목·키워드)과 논란 온도를 섞어 정렬 — 인스타에 올렸을 때 반응이 붙는 카드가 위로.
     const rank = (issue: Issue) => (issue.buzz ?? 0) * 0.6 + (issue.temp ?? issue.buzz ?? 0) * 0.4;
     return unique.sort((a, b) => rank(b) - rank(a) || b.publishedAt - a.publishedAt);
-  }, [doc, extra]);
+  }, [activeIssues, extra, activeDay, todayKey]);
+
+  /** 날짜 칩 — 오늘부터 3일 전까지, 실제 꺼낼 수 있는 카드 수와 함께. */
+  const dayOptions = useMemo<DayOption[]>(() => {
+    return recentDayKeys(DAY_KEEP).map((date) => {
+      const count = date === todayKey ? doc?.issues?.length ?? 0 : days[date]?.issues.length ?? 0;
+      return {
+        date,
+        label: dayChipLabel(date, todayKey),
+        count,
+        active: date === activeDay,
+        empty: count === 0,
+      };
+    });
+  }, [todayKey, activeDay, doc, days]);
+
+  /** 날짜를 고르면 그날 카드를 꺼냅니다 — 서버 보관분 → 이 기기 보관분 → 기사 발행일 순. */
+  const selectDay = async (date: string) => {
+    setActiveDay(date);
+    setDayNotice(null);
+    if (date === todayKey) {
+      if (doc?.issues?.length) void loadPolls(doc.issues);
+      return;
+    }
+    const kept = days[date];
+    if (kept?.issues.length) {
+      void loadPolls(kept.issues);
+      return;
+    }
+    setDayLoading(true);
+    const fromToday = issuesByPublishedDay(doc?.issues ?? [], date);
+    // 서버가 보관 중이라고 알려 준 날짜만 물어봅니다 — 없는 걸 물으면 빈 응답 대기·404만 쌓입니다.
+    const listed = doc?.availableDates ? doc.availableDates.some((entry) => entry.date === date) : true;
+    try {
+      if (listed) {
+        const res = await fetchTrending({ date });
+        if (res.ok && res.issues && res.issues.length > 0) {
+          saveDay(date, res.issues, res.generatedAt ?? Date.now());
+          setDays(loadDays());
+          void loadPolls(res.issues);
+          return;
+        }
+      }
+    } catch {
+      /* 서버에 없으면 아래 보관분·발행일 기준으로 */
+    } finally {
+      setDayLoading(false);
+    }
+    if (fromToday.length > 0) {
+      saveDay(date, fromToday, Date.now());
+      setDays(loadDays());
+      void loadPolls(fromToday);
+      setDayNotice(`${dayName(date, todayKey)} 발행 기사 중 지금 피드에 남아 있는 ${fromToday.length}장을 모았어요.`);
+    } else {
+      setDayNotice(`${dayChipLabel(date, todayKey)} 카드는 보관된 게 없어요. 오늘·어제·그제 카드만 남습니다.`);
+    }
+  };
 
   /** 화면·PNG·캡션이 함께 쓰는 카드 목록 — 크리에이터가 고친 문구가 얹혀 있습니다. */
   const issues = useMemo(() => ranked.map((issue) => applyCopy(issue, copies[issue.id])), [ranked, copies]);
@@ -336,6 +414,8 @@ export default function App() {
   const recommendedIds = new Set(issues.slice(0, DAILY_GOAL).map((issue) => issue.id));
   const feedTotal = (doc?.feeds ?? []).length || 19;
   const publishedCount = issues.filter((issue) => doneSet.has(issue.id)).length;
+  // 상단 목표는 '오늘 몇 장 올렸나' — 지난 날짜를 볼 때도 오늘 숫자를 유지합니다.
+  const publishedToday = (doc?.issues ?? []).filter((issue) => doneSet.has(issue.id)).length;
   const savedCount = issues.filter((issue) => savedSet.has(issue.id)).length;
   const filtering = query.trim() !== "" || category !== "all" || feedStatus !== "all";
 
@@ -354,7 +434,7 @@ export default function App() {
         feedTotal={(doc?.feeds ?? []).length}
         aiOn={Boolean(doc?.ai)}
         refreshing={refreshing}
-        publishedCount={publishedCount}
+        publishedCount={publishedToday}
         dailyGoal={DAILY_GOAL}
         onRefresh={() => void load(true)}
         onOpenStudio={() => setStudioOpen(true)}
@@ -380,7 +460,7 @@ export default function App() {
           </section>
         ) : status === "loading" ? (
           <LoadingSkeleton />
-        ) : status === "error" || issues.length === 0 ? (
+        ) : status === "error" || (issues.length === 0 && activeDay === todayKey) ? (
           <section className="panel" data-testid="error-panel">
             <h2>오늘의 뉴스를 가져오지 못했어요</h2>
             <p>{error ?? "잠시 뒤 다시 시도해 주세요."}</p>
@@ -388,6 +468,23 @@ export default function App() {
               다시 시도
             </button>
           </section>
+        ) : issues.length === 0 ? (
+          <>
+            <DayBar
+              days={dayOptions}
+              activeLabel={dayName(activeDay, todayKey)}
+              activeCount={0}
+              loading={dayLoading}
+              onSelect={(date) => void selectDay(date)}
+            />
+            <section className="panel" data-testid="day-empty-panel">
+              <h2>{dayChipLabel(activeDay, todayKey)} 카드는 보관된 게 없어요</h2>
+              <p>{dayNotice ?? "오늘·어제·그제 카드만 날짜별로 남습니다. 오늘 피드를 열어 두면 내일도 어제 카드로 남습니다."}</p>
+              <button type="button" className="cta" onClick={() => void selectDay(todayKey)} data-testid="day-back-today">
+                오늘 카드 보기
+              </button>
+            </section>
+          </>
         ) : (
           <>
             {(doc?.notice || staleNotice) && (
@@ -401,19 +498,34 @@ export default function App() {
               </p>
             )}
 
+            <DayBar
+              days={dayOptions}
+              activeLabel={dayName(activeDay, todayKey)}
+              activeCount={issues.length}
+              loading={dayLoading}
+              onSelect={(date) => void selectDay(date)}
+            />
+            {dayNotice && (
+              <p className="notice" data-testid="day-notice">
+                {dayNotice}
+              </p>
+            )}
+
             <section className="masthead" data-testid="masthead">
               <div className="masthead-rule">
-                <span>DAILY INDEX</span>
+                <span>{activeDay === todayKey ? "DAILY INDEX" : "ARCHIVE"}</span>
                 <span>{issues.length} STORIES</span>
               </div>
               <h2 className="masthead-title">
-                오늘, 어디서
+                {dayName(activeDay, todayKey)}, 어디서
                 <br />
                 갈렸나<span className="masthead-dot">.</span>
               </h2>
               <p className="masthead-sub">
-                언론사 {feedTotal}곳의 실제 기사만 모아 인스타 카드뉴스 5장으로. 오늘 올릴{" "}
-                {DAILY_GOAL}장을 화제성 순으로 골라 놓았어요.
+                언론사 {feedTotal}곳의 실제 기사만 모아 인스타 카드뉴스 5장으로.{" "}
+                {activeDay === todayKey
+                  ? `오늘 올릴 ${DAILY_GOAL}장을 화제성 순으로 골라 놓았어요.`
+                  : "그날 올릴 카드를 그대로 다시 꺼내 쓸 수 있어요."}
               </p>
             </section>
 
@@ -427,6 +539,7 @@ export default function App() {
               doneCount={publishedCount}
               published={publishedCount}
               goal={DAILY_GOAL}
+              goalLabel={activeDay === todayKey ? "오늘 발행" : `${dayName(activeDay, todayKey)} 발행`}
               onQuery={setQuery}
               onCategory={setCategory}
               onStatus={setFeedStatus}
@@ -438,7 +551,7 @@ export default function App() {
                 <section className="hero-wrap">
                   <div className="hero-label">
                     <span className="hero-label-dot" aria-hidden="true" />
-                    <span>{filtering ? "조건에 맞는 가장 뜨거운 이슈" : "오늘 가장 뜨거운 이슈"}</span>
+                    <span>{filtering ? "조건에 맞는 가장 뜨거운 이슈" : `${dayName(activeDay, todayKey)} 가장 뜨거운 이슈`}</span>
                     <span className="hero-label-line" aria-hidden="true" />
                     <span className="hero-tools">
                       <button
@@ -474,7 +587,9 @@ export default function App() {
                       오늘의 카드뉴스 <em>{feed.length}</em>
                     </h2>
                     <span className="section-note">
-                      {filtering ? "검색·필터 결과 · 조건 지우면 전체로" : "화제성 순 · 위 4장은 오늘 올릴 만한 카드"}
+                      {filtering
+                        ? "검색·필터 결과 · 조건 지우면 전체로"
+                        : `화제성 순 · 위 4장은 ${dayName(activeDay, todayKey)} 올릴 만한 카드`}
                     </span>
                   </div>
                   {feed.length === 0 ? (
